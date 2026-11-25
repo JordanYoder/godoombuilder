@@ -29,6 +29,10 @@ class FakePlugin:
 	var notes: Array[String] = []
 	func notify(msg: String, _severity := 0) -> void: notes.append(msg)
 	var commits: Array[String] = []
+	var joins := 0
+	var hides := 0
+	func set_wall_hidden(_h: bool) -> void: hides += 1
+	func join_selected() -> void: joins += 1
 	func commit_snapshot(action: String, _before: DMMapData) -> void:
 		commits.append(action)
 		map.rebuild()
@@ -191,6 +195,13 @@ func _run() -> void:
 	key(KEY_DELETE)
 	check(map.data.sectors.size() == 1, "Delete removes the selected sector")
 
+	# J joins when two or more sectors are selected.
+	tool.selected = [0]
+	check(key(KEY_J) == EditorPlugin.AFTER_GUI_INPUT_PASS and plugin.joins == 0, "J needs two selected sectors")
+	tool.selected = [0, 1]
+	check(key(KEY_J) == EditorPlugin.AFTER_GUI_INPUT_STOP and plugin.joins == 1, "J joins the selection")
+	tool.selected = []
+
 	# Rectangle by two clicks.
 	var count := map.data.sectors.size()
 	check(key(KEY_B) == EditorPlugin.AFTER_GUI_INPUT_STOP and tool.mode == DMTool.Mode.RECT, "B starts a rectangle")
@@ -327,6 +338,58 @@ func _run() -> void:
 	key(KEY_ESCAPE)
 	mouse_button(w.call(4, 2), false)
 	check(absf(map2.data.sectors[0].area() - areas[0]) < 0.01 and tool.drag.is_empty(), "Esc cancels a drag")
+
+	# Clicking a wall selects just that wall; Delete hides it.
+	tool.selected = []
+	cam.global_transform = Transform3D(Basis(), Vector3(102, 2, 3))
+	click(cam.unproject_position(Vector3(102, 2, -10)))
+	var wall_ok: bool = not tool.selected_wall.is_empty() and tool.selected.size() == 1
+	check(wall_ok, "clicking a wall selects that wall (%s)" % str(tool.selected_wall))
+	if wall_ok:
+		check(tool.selected_wall_faces().size() > 0, "the selected wall's faces are found for highlighting")
+	key(KEY_DELETE)
+	check(plugin.hides == 1, "Delete with a wall selected hides the wall instead of deleting the sector")
+	click(cam.unproject_position(Vector3(102, 0, 1)))
+	check(tool.selected_wall.is_empty() and tool.selected.size() == 1, "clicking a floor selects the sector, not a wall")
+
+	# Thick walls: outer corners and outer faces have handles.
+	var map3 := DMMap.new()
+	map3.data = DMMapData.new()
+	map3.position = Vector3(200, 0, 0)
+	vp.add_child(map3)
+	map3.data.add_loop(rect2(0, 0, 4, 4), DMSector.new())
+	map3.data.sectors[0].wall_thickness = 0.5
+	map3.rebuild()
+	plugin.map = map3
+	tool.set_map(map3)
+	cam.global_transform = Transform3D(Basis.from_euler(Vector3(-PI / 2.0, 0, 0)), Vector3(202, 14, 2))
+	var w3 := func(x: float, z: float) -> Vector2: return cam.unproject_position(Vector3(200 + x, 0, z))
+	click(w3.call(2, 2))
+	check(tool.selected == [0], "select the thick-walled room")
+	move(w3.call(-0.5, -0.5))
+	check(tool.handle.get("kind", "") == "outer_vertex", "the thick wall's outer corner has a handle")
+	drag_from_to(w3.call(-0.5, -0.5), w3.call(-1.5, -1.0))
+	var oc: Dictionary = map3.data.sectors[0].outer_corners
+	check(oc.size() == 1 and (oc.values()[0] as Vector2).is_equal_approx(Vector2(-1.5, -1.0)) and plugin.commits.back() == "Move Wall Corner",
+		"dragging the outer corner places it there (%s)" % str(oc))
+	check(absf(map3.data.sectors[0].area() - 16.0) < 0.001, "the room itself doesn't change")
+	move(w3.call(4.5, 2))
+	check(tool.handle.get("kind", "") == "outer_edge", "the thick wall's outer face has a handle")
+	drag_from_to(w3.call(4.5, 2), w3.call(5.6, 2.3))
+	var east := map3.data.sectors[0].wall_override(Vector2(4, 0), Vector2(4, 4))
+	check(absf(float(east.get("thickness", -1)) - 1.5) < 0.001 and plugin.commits.back() == "Set Wall Thickness",
+		"dragging the outer face out makes that wall 1.5 m thick (snapped)")
+	drag_from_to(w3.call(5.5, 2), w3.call(3.0, 2))
+	east = map3.data.sectors[0].wall_override(Vector2(4, 0), Vector2(4, 4))
+	check(absf(float(east.get("thickness", -1))) < 0.001, "dragging it all the way in makes the wall thin")
+	move(w3.call(-0.5, -0.5))
+	mouse_button(w3.call(-0.5, -0.5), true)
+	move(w3.call(-3, -3))
+	key(KEY_ESCAPE)
+	mouse_button(w3.call(-3, -3), false)
+	check((map3.data.sectors[0].outer_corners.values()[0] as Vector2).is_equal_approx(Vector2(-1.5, -1.0)), "Esc cancels an outer-corner drag")
+	overlay.queue_redraw()
+	await process_frame
 
 	print("RESULT: %s (%d failures)" % ["OK" if fails == 0 else "FAILED", fails])
 	quit(1 if fails else 0)

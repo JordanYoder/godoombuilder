@@ -71,6 +71,7 @@ func _initialize() -> void:
 	data.sectors[pool.index].floor_height = 0.25
 	data.sectors[pool.index].ceiling_height = 7.0
 	data.sectors[pool.index].floor_material = slime_mat
+	data.sectors[pool.index].has_ceiling = false # Open to the sky.
 
 	var level := Node3D.new()
 	level.name = "DemoLevel"

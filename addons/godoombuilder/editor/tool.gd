@@ -48,6 +48,10 @@ var rect_field := 0
 ## Fixed rectangle size in meters per axis; negative follows the mouse.
 var rect_size := Vector2(-1.0, -1.0)
 
+## The single wall picked by clicking it: {sector, a, b} (a, b: the sector
+## polygon edge), or {}. Its sector is the only selected sector.
+var selected_wall := {}
+
 ## Corner or wall of a selected sector under the mouse:
 ## {kind: "vertex"|"edge", a, b (Vector2), h (float)} or {}.
 var handle := {}
@@ -75,6 +79,8 @@ func validate_selection() -> void:
 		if i < count and not keep.has(i):
 			keep.append(i)
 	selected = keep
+	if not selected_wall.is_empty() and (selected != [int(selected_wall.sector)]):
+		selected_wall = {}
 	if not hover.is_empty() and int(hover.sector) >= count:
 		hover = {}
 
@@ -248,7 +254,14 @@ func _key(k: InputEventKey) -> int:
 					rect_started = false
 				_changed()
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
+		KEY_J:
+			if mode == Mode.SELECT and plain and not k.shift_pressed and not k.echo and selected.size() >= 2:
+				plugin.join_selected()
+				return EditorPlugin.AFTER_GUI_INPUT_STOP
 		KEY_DELETE:
+			if mode == Mode.SELECT and not selected_wall.is_empty() and plain:
+				plugin.set_wall_hidden(true)
+				return EditorPlugin.AFTER_GUI_INPUT_STOP
 			if mode == Mode.SELECT and not selected.is_empty() and plain:
 				plugin.delete_selected()
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
@@ -270,6 +283,7 @@ func _select_click(additive: bool) -> int:
 		# Let Godot handle clicks on empty space (select other nodes, etc.).
 		return EditorPlugin.AFTER_GUI_INPUT_PASS
 	var s := int(hover.sector)
+	selected_wall = {}
 	if additive:
 		if selected.has(s):
 			selected.erase(s)
@@ -277,6 +291,10 @@ func _select_click(additive: bool) -> int:
 			selected.append(s)
 	else:
 		selected = [s]
+		if int(hover.part) == DMBuilder.Part.WALL:
+			var fe: PackedVector2Array = map.build_info.face_edge
+			var f := int(hover.face)
+			selected_wall = {"sector": s, "a": fe[f * 2], "b": fe[f * 2 + 1]}
 	_consume_release = true
 	_changed()
 	return EditorPlugin.AFTER_GUI_INPUT_STOP
@@ -489,6 +507,13 @@ func _find_handle() -> Dictionary:
 			if sp != null and (sp as Vector2).distance_to(mouse_pos) < best:
 				best = (sp as Vector2).distance_to(mouse_pos)
 				found = {"kind": "vertex", "a": q, "b": q, "h": h}
+	for c in map.build_info.get("outer_corners", []):
+		if not selected.has(int(c.sector)):
+			continue
+		var sp = _screen(_v3(c.outer, c.h))
+		if sp != null and (sp as Vector2).distance_to(mouse_pos) < best:
+			best = (sp as Vector2).distance_to(mouse_pos)
+			found = {"kind": "outer_vertex", "sector": int(c.sector), "inner": c.inner, "a": c.outer, "b": c.outer, "h": float(c.h)}
 	if not found.is_empty():
 		return found
 	best = EDGE_PX
@@ -504,6 +529,18 @@ func _find_handle() -> Dictionary:
 			if c.distance_to(mouse_pos) < best:
 				best = c.distance_to(mouse_pos)
 				found = {"kind": "edge", "a": outline[i], "b": outline[i + 1], "h": h}
+	for e in map.build_info.get("outer_edges", []):
+		if not selected.has(int(e.sector)):
+			continue
+		var sa = _screen(_v3(e.a2, e.h))
+		var sb = _screen(_v3(e.b2, e.h))
+		if sa == null or sb == null:
+			continue
+		var c := Geometry2D.get_closest_point_to_segment(mouse_pos, sa, sb)
+		if c.distance_to(mouse_pos) < best:
+			best = c.distance_to(mouse_pos)
+			found = {"kind": "outer_edge", "sector": int(e.sector), "inner_a": e.a, "inner_b": e.b,
+				"out": e.out, "thickness": float(e.thickness), "a": e.a2, "b": e.b2, "h": float(e.h)}
 	return found
 
 
@@ -525,6 +562,9 @@ func _update_drag() -> void:
 		return
 	var a: Vector2 = drag.a
 	var b: Vector2 = drag.b
+	if drag.kind == "outer_vertex" or drag.kind == "outer_edge":
+		_update_outer_drag(p)
+		return
 	var from := PackedVector2Array()
 	var to := PackedVector2Array()
 	if drag.kind == "vertex":
@@ -550,6 +590,36 @@ func _update_drag() -> void:
 	map.rebuild()
 
 
+## Dragging a thick wall's outer corner (placed freely) or outer face
+## (changes that wall's thickness).
+func _update_outer_drag(p: Vector2) -> void:
+	var a: Vector2 = drag.a
+	map.data.copy_from(drag.before)
+	var s: DMSector = map.data.sectors[int(drag.sector)]
+	if drag.kind == "outer_vertex":
+		var target := _snap_point(p, float(drag.h))
+		drag.to_a = target
+		drag.to_b = target
+		drag.moved = not target.is_equal_approx(a)
+		if drag.moved:
+			s.outer_corners[DMMapData.key_of(drag.inner)] = target - (drag.inner as Vector2)
+	else:
+		var out: Vector2 = drag.out
+		var t := maxf((p - (drag.inner_a as Vector2)).dot(out), 0.0)
+		if not Input.is_key_pressed(KEY_SHIFT):
+			t = maxf(snappedf(t, float(plugin.grid_step)), 0.0)
+		drag.thickness_now = t
+		drag.to_a = (drag.inner_a as Vector2) + out * t
+		drag.to_b = (drag.inner_b as Vector2) + out * t
+		drag.moved = not is_equal_approx(t, float(drag.thickness))
+		if drag.moved:
+			var edge := s.override_edge(drag.inner_a, drag.inner_b)
+			s.set_wall_override(edge[0], edge[1], {"thickness": t})
+			s.clear_outer_corners([drag.inner_a, drag.inner_b])
+	drag.valid = true
+	map.rebuild()
+
+
 func _end_drag() -> void:
 	var d := drag
 	drag = {}
@@ -559,7 +629,8 @@ func _end_drag() -> void:
 		map.rebuild()
 		plugin.notify("Can't move it there: " + why + ".")
 	elif d.moved:
-		plugin.commit_snapshot("Move Corner" if d.kind == "vertex" else "Move Wall", d.before)
+		var names := {"vertex": "Move Corner", "edge": "Move Wall", "outer_vertex": "Move Wall Corner", "outer_edge": "Set Wall Thickness"}
+		plugin.commit_snapshot(names.get(d.kind, "Move"), d.before)
 	_update_hover()
 	_changed()
 
@@ -597,6 +668,9 @@ func draw_overlay(overlay: Control) -> void:
 			_line3(overlay, _v3(outline[i], s.floor_height), _v3(outline[i + 1], s.floor_height), COLOR_SELECTED, 3.0)
 			_line3(overlay, _v3(outline[i], s.ceiling_height), _v3(outline[i + 1], s.ceiling_height), Color(COLOR_SELECTED, 0.45), 1.5)
 
+	_draw_hidden_walls(overlay)
+	if not selected_wall.is_empty():
+		_draw_selected_wall(overlay)
 	if mode == Mode.SELECT:
 		_draw_handles(overlay)
 	if mode == Mode.SELECT and drag.is_empty() and handle.is_empty() and not hover.is_empty():
@@ -616,6 +690,45 @@ func draw_overlay(overlay: Control) -> void:
 		_draw_rect(overlay)
 
 
+## Faces built from the selected wall's edge.
+func selected_wall_faces() -> Array[int]:
+	var out: Array[int] = []
+	if selected_wall.is_empty():
+		return out
+	var fe: PackedVector2Array = map.build_info.face_edge
+	var fs: PackedInt32Array = map.build_info.face_sector
+	for f in fs.size():
+		if fs[f] == int(selected_wall.sector) and fe[f * 2].is_equal_approx(selected_wall.a) \
+				and fe[f * 2 + 1].is_equal_approx(selected_wall.b):
+			out.append(f)
+	return out
+
+
+func _draw_selected_wall(overlay: Control) -> void:
+	for f in selected_wall_faces():
+		_draw_face_outline(overlay, f, Color.WHITE, 3.0)
+	var s: DMSector = map.data.sectors[int(selected_wall.sector)]
+	var o := s.wall_override(selected_wall.a, selected_wall.b)
+	if o.get("hidden", false):
+		_dashed_wall(overlay, selected_wall.a, selected_wall.b, o.get("bottom", s.floor_height), o.get("top", s.ceiling_height), Color.WHITE)
+
+
+## Hidden walls of the selected sectors, as dashed outlines.
+func _draw_hidden_walls(overlay: Control) -> void:
+	for hw in map.build_info.get("hidden_walls", []):
+		if selected.has(int(hw[4])):
+			_dashed_wall(overlay, hw[0], hw[1], hw[2], hw[3], Color(COLOR_SELECTED, 0.8))
+
+
+func _dashed_wall(overlay: Control, p0: Vector2, p1: Vector2, bottom: float, top: float, color: Color) -> void:
+	var c := [_v3(p0, bottom), _v3(p1, bottom), _v3(p1, top), _v3(p0, top)]
+	for i in 4:
+		var sa = _screen(c[i])
+		var sb = _screen(c[(i + 1) % 4])
+		if sa != null and sb != null:
+			overlay.draw_dashed_line(sa, sb, color, 2.0, 6.0)
+
+
 func _draw_handles(overlay: Control) -> void:
 	var info := map.build_info
 	for si in selected:
@@ -628,6 +741,12 @@ func _draw_handles(overlay: Control) -> void:
 			if sp != null:
 				overlay.draw_rect(Rect2((sp as Vector2) - Vector2(3.5, 3.5), Vector2(7, 7)), Color(0, 0, 0, 0.7))
 				overlay.draw_rect(Rect2((sp as Vector2) - Vector2(2.5, 2.5), Vector2(5, 5)), COLOR_SELECTED)
+	for c in info.get("outer_corners", []):
+		if selected.has(int(c.sector)):
+			var sp = _screen(_v3(c.outer, c.h))
+			if sp != null:
+				overlay.draw_rect(Rect2((sp as Vector2) - Vector2(3.5, 3.5), Vector2(7, 7)), Color(0, 0, 0, 0.7))
+				overlay.draw_rect(Rect2((sp as Vector2) - Vector2(2.5, 2.5), Vector2(5, 5)), COLOR_DRAW)
 	var active := drag if not drag.is_empty() else handle
 	if active.is_empty():
 		return
@@ -635,14 +754,21 @@ func _draw_handles(overlay: Control) -> void:
 	var h := float(active.h)
 	var a: Vector2 = active.get("to_a", active.a)
 	var b: Vector2 = active.get("to_b", active.b)
-	if active.kind == "edge":
+	var is_edge: bool = active.kind == "edge" or active.kind == "outer_edge"
+	if is_edge:
 		_line3(overlay, _v3(a, h), _v3(b, h), color, 4.0)
 		_length_label(overlay, a, b, h)
 	_marker(overlay, _v3(a, h), color, 5.0)
-	if active.kind == "edge":
+	if is_edge:
 		_marker(overlay, _v3(b, h), color, 5.0)
-	var tip := "Drag to move this corner" if active.kind == "vertex" else "Drag to move this wall"
-	if not drag.is_empty():
+	var tips := {"vertex": "Drag to move this corner", "edge": "Drag to move this wall",
+		"outer_vertex": "Drag to reshape the thick wall's outer corner", "outer_edge": "Drag to change this wall's thickness"}
+	var tip: String = tips.get(active.kind, "")
+	if not drag.is_empty() and active.kind == "outer_edge":
+		tip = "Thickness: " + DMUnits.format(float(drag.get("thickness_now", drag.thickness)), plugin.units)
+	elif not drag.is_empty() and active.kind == "outer_vertex":
+		tip = "Corner: %s, %s" % [DMUnits.format(a.x, plugin.units), DMUnits.format(a.y, plugin.units)]
+	elif not drag.is_empty():
 		tip = "Can't go here (sides would cross or overlap)" if not drag.valid else (
 			"Corner: %s, %s" % [DMUnits.format(a.x, plugin.units), DMUnits.format(a.y, plugin.units)]
 			if active.kind == "vertex" else "Moved %s" % DMUnits.format(a.distance_to(active.a), plugin.units))

@@ -16,6 +16,7 @@ var grid_step := 0.5
 var defaults := DMSector.new()
 
 var _dock: EditorDock
+var _toolbar: DMToolbar
 var _grid: DMGrid
 
 
@@ -37,6 +38,11 @@ func _enter_tree() -> void:
 	_dock.add_child(dock_panel)
 	add_dock(_dock)
 
+	_toolbar = DMToolbar.new()
+	_toolbar.plugin = self
+	_toolbar.visible = false
+	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _toolbar)
+
 
 func _exit_tree() -> void:
 	_save_settings()
@@ -44,6 +50,10 @@ func _exit_tree() -> void:
 	if _grid != null:
 		_grid.cleanup()
 		_grid = null
+	if _toolbar != null:
+		remove_control_from_container(CONTAINER_SPATIAL_EDITOR_MENU, _toolbar)
+		_toolbar.queue_free()
+		_toolbar = null
 	if _dock != null:
 		remove_dock(_dock)
 		_dock.queue_free()
@@ -92,6 +102,8 @@ func _on_map_data_changed() -> void:
 	tool.validate_selection()
 	if dock_panel != null:
 		dock_panel.refresh()
+	if _toolbar != null:
+		_toolbar.refresh()
 	update_overlays()
 
 
@@ -99,6 +111,9 @@ func _on_map_data_changed() -> void:
 func on_tool_changed() -> void:
 	if dock_panel != null:
 		dock_panel.refresh()
+	if _toolbar != null:
+		_toolbar.visible = map != null
+		_toolbar.refresh()
 	_update_grid()
 	update_overlays()
 
@@ -199,6 +214,204 @@ func resize_selected(axis: int, meters: float) -> void:
 		on_tool_changed()
 		return
 	_commit("Resize Sector", before, true)
+
+
+## Joins the selected sectors into one (the first selected one's heights and
+## materials win).
+func join_selected() -> void:
+	if map == null or tool.selected.size() < 2:
+		notify("Shift+click two or more sectors to join them.")
+		return
+	var before := map.data.duplicate_data()
+	var index := map.data.join_sectors(tool.selected)
+	tool.selected = [index]
+	_commit("Join Sectors", before)
+
+
+## Wall thickness settings used by thicken_selected (meters; -1 inside,
+## 0 centered, 1 outside).
+var wall_thickness := 0.25
+var wall_side := 1
+
+
+## Gives each selected sector's walls a thickness (a solid band along its
+## boundary).
+func thicken_selected() -> void:
+	if map == null or tool.selected.is_empty():
+		return
+	if not tool.selected_wall.is_empty():
+		_thicken_wall()
+		return
+	var before := map.data.duplicate_data()
+	var targets: Array = []
+	for i in tool.selected:
+		targets.append(map.data.sectors[i])
+	var kept: Array[int] = []
+	for t in targets:
+		var i: int = map.data.sectors.find(t)
+		if i < 0:
+			continue
+		var r := map.data.thicken_walls(i, wall_thickness, wall_side)
+		if not r.ok:
+			map.data.copy_from(before)
+			map.rebuild()
+			notify(r.message)
+			on_tool_changed()
+			return
+	var why := map.data.validate()
+	if not why.is_empty():
+		map.data.copy_from(before)
+		map.rebuild()
+		notify("Can't thicken the walls: " + why + ".")
+		on_tool_changed()
+		return
+	for t in targets:
+		var i: int = map.data.sectors.find(t)
+		if i >= 0:
+			kept.append(i)
+	tool.selected = kept
+	_commit("Thicken Walls", before)
+
+
+# --- Single walls --------------------------------------------------------------
+
+## The selected wall's sector, or null.
+func _wall_sector() -> DMSector:
+	if map == null or tool.selected_wall.is_empty():
+		return null
+	var i := int(tool.selected_wall.sector)
+	return map.data.sectors[i] if i < map.data.sectors.size() else null
+
+
+func set_wall_hidden(hidden: bool) -> void:
+	var s := _wall_sector()
+	if s == null:
+		return
+	var before := map.data.duplicate_data()
+	map.data.sectors[int(tool.selected_wall.sector)].set_wall_override(
+		tool.selected_wall.a, tool.selected_wall.b, {"hidden": true if hidden else null})
+	_commit("Hide Wall" if hidden else "Show Wall", before)
+
+
+## Sets the selected wall's own bottom or top height (meters).
+func set_wall_height(top: bool, meters: float) -> void:
+	var s := _wall_sector()
+	if s == null:
+		return
+	var before := map.data.duplicate_data()
+	map.data.sectors[int(tool.selected_wall.sector)].set_wall_override(
+		tool.selected_wall.a, tool.selected_wall.b, {("top" if top else "bottom"): meters})
+	_commit("Set Wall Height", before, true)
+
+
+## Back to the sector's heights, and shown.
+func reset_wall() -> void:
+	var s := _wall_sector()
+	if s == null:
+		return
+	var before := map.data.duplicate_data()
+	map.data.sectors[int(tool.selected_wall.sector)].set_wall_override(
+		tool.selected_wall.a, tool.selected_wall.b, {"hidden": null, "top": null, "bottom": null, "thickness": null})
+	map.data.sectors[int(tool.selected_wall.sector)].clear_outer_corners([tool.selected_wall.a, tool.selected_wall.b])
+	_commit("Reset Wall", before)
+
+
+func show_hidden_walls() -> void:
+	if map == null or tool.selected.is_empty():
+		return
+	var before := map.data.duplicate_data()
+	for i in tool.selected:
+		map.data.sectors[i].show_hidden_walls()
+	_commit("Show Hidden Walls", before)
+
+
+## Sets the selected sectors' outer wall thickness directly (0 = thin).
+func set_selected_wall_thickness(meters: float) -> void:
+	if map == null or tool.selected.is_empty():
+		return
+	var before := map.data.duplicate_data()
+	for i in tool.selected:
+		map.data.sectors[i].wall_thickness = maxf(meters, 0.0)
+		map.data.sectors[i].clear_outer_corners()
+	_commit("Set Wall Thickness", before, true)
+
+
+## Sets the selected wall's own thickness (0 = thin, null = the sector's).
+func set_wall_thickness(meters) -> void:
+	var s := _wall_sector()
+	if s == null:
+		return
+	var before := map.data.duplicate_data()
+	map.data.sectors[int(tool.selected_wall.sector)].set_wall_override(
+		tool.selected_wall.a, tool.selected_wall.b, {"thickness": maxf(float(meters), 0.0) if meters != null else null})
+	map.data.sectors[int(tool.selected_wall.sector)].clear_outer_corners([tool.selected_wall.a, tool.selected_wall.b])
+	_commit("Set Wall Thickness", before, true)
+
+
+func set_selected_floor(on: bool) -> void:
+	if map == null or tool.selected.is_empty():
+		return
+	var before := map.data.duplicate_data()
+	for i in tool.selected:
+		map.data.sectors[i].has_floor = on
+	_commit("Floor On" if on else "Remove Floor", before)
+
+
+## Removes points that don't change the selected sectors' shapes.
+func simplify_selected() -> void:
+	if map == null or tool.selected.is_empty():
+		return
+	var before := map.data.duplicate_data()
+	var removed := 0
+	for i in tool.selected:
+		removed += map.data.simplify_sector(i)
+	if removed == 0:
+		notify("Nothing to simplify: every point changes the shape.", EditorToaster.SEVERITY_INFO)
+		return
+	var why := map.data.validate()
+	if not why.is_empty():
+		map.data.copy_from(before)
+		map.rebuild()
+		notify("Can't simplify: " + why + ".")
+		on_tool_changed()
+		return
+	_commit("Simplify Sector", before)
+	notify("Removed %d point%s." % [removed, "" if removed == 1 else "s"], EditorToaster.SEVERITY_INFO)
+
+
+func _thicken_wall() -> void:
+	var w: Dictionary = tool.selected_wall
+	var before := map.data.duplicate_data()
+	var r := map.data.thicken_edge(int(w.sector), w.a, w.b, wall_thickness, wall_side)
+	var why: String = r.message if not r.ok else map.data.validate()
+	if not why.is_empty():
+		map.data.copy_from(before)
+		map.rebuild()
+		notify(why if not r.ok else "Can't thicken the wall: " + why + ".")
+		on_tool_changed()
+		return
+	tool.selected = [int(r.index)]
+	# Thickening outward leaves the wall where it is; otherwise it moved.
+	if wall_side > 0:
+		tool.selected_wall = {"sector": int(r.index), "a": w.a, "b": w.b}
+	else:
+		tool.selected_wall = {}
+	_commit("Thicken Wall", before)
+
+
+func set_selected_ceiling(on: bool) -> void:
+	if map == null or tool.selected.is_empty():
+		return
+	var before := map.data.duplicate_data()
+	for i in tool.selected:
+		map.data.sectors[i].has_ceiling = on
+	_commit("Ceiling On" if on else "Open to Sky", before)
+
+
+func set_default_ceiling(on: bool) -> void:
+	defaults.has_ceiling = on
+	_save_settings()
+	on_tool_changed()
 
 
 func delete_selected() -> void:
@@ -321,6 +534,9 @@ func _load_settings() -> void:
 	grid_step = float(es.get_project_metadata(SETTINGS, "grid_step", 0.5))
 	defaults.floor_height = float(es.get_project_metadata(SETTINGS, "default_floor", 0.0))
 	defaults.ceiling_height = float(es.get_project_metadata(SETTINGS, "default_ceiling", 4.0))
+	defaults.has_ceiling = bool(es.get_project_metadata(SETTINGS, "default_has_ceiling", true))
+	wall_thickness = float(es.get_project_metadata(SETTINGS, "wall_thickness", 0.25))
+	wall_side = int(es.get_project_metadata(SETTINGS, "thicken_side", 1))
 	defaults.floor_material = _load_material(es.get_project_metadata(SETTINGS, "default_floor_mat", ""))
 	defaults.ceiling_material = _load_material(es.get_project_metadata(SETTINGS, "default_ceiling_mat", ""))
 	defaults.wall_material = _load_material(es.get_project_metadata(SETTINGS, "default_wall_mat", ""))
@@ -332,6 +548,9 @@ func _save_settings() -> void:
 	es.set_project_metadata(SETTINGS, "grid_step", grid_step)
 	es.set_project_metadata(SETTINGS, "default_floor", defaults.floor_height)
 	es.set_project_metadata(SETTINGS, "default_ceiling", defaults.ceiling_height)
+	es.set_project_metadata(SETTINGS, "default_has_ceiling", defaults.has_ceiling)
+	es.set_project_metadata(SETTINGS, "wall_thickness", wall_thickness)
+	es.set_project_metadata(SETTINGS, "thicken_side", wall_side)
 	es.set_project_metadata(SETTINGS, "default_floor_mat", _material_path(defaults.floor_material))
 	es.set_project_metadata(SETTINGS, "default_ceiling_mat", _material_path(defaults.ceiling_material))
 	es.set_project_metadata(SETTINGS, "default_wall_mat", _material_path(defaults.wall_material))

@@ -25,6 +25,9 @@ height, and floor/ceiling/wall materials.
 - Drawing inside a sector makes a sub-sector (platform, pit, pillar) that
   starts with the same heights. Drawing across sectors cuts them.
 - Deleting a sector leaves solid space (e.g. a pillar).
+- A sector can be open to the sky (untick **Has ceiling**): no ceiling is
+  built, its walls still rise to its ceiling height, and there are no upper
+  walls between two open sectors (like Doom's sky).
 - Collision is built automatically, in the editor and in the game.
 - Textures are world-aligned (one repeat per meter), so they line up across
   neighbouring floors and walls.
@@ -32,6 +35,14 @@ height, and floor/ceiling/wall materials.
   mesh is rebuilt when the scene loads.
 
 ## Controls (with the Sector Map selected)
+
+While a Sector Map is selected, a **toolbar** above the 3D viewport has the
+tools (Select, Draw, Rectangle), the actions on the selection (Join, Simplify,
+Thicken with its thickness, Delete / Hide Wall), Floor / Ceiling toggles, and
+the grid and units. The **Sectors** panel next to the Inspector has the same
+actions plus every value of the selection; its *New sectors* and *Controls*
+sections are folded away until you open them.
+
 
 - `D` — draw a sector: click points (grid snapped; snaps to existing corners),
   click the first point or press Enter to finish, Backspace removes a point,
@@ -49,6 +60,37 @@ height, and floor/ceiling/wall materials.
   cancels a drag.
 - Width / Depth in the dock resize the selected sectors exactly, keeping the
   center or a chosen corner fixed.
+- Click a wall — select just that wall. In the dock, set its own **Wall top**
+  / **Wall bottom** (e.g. a 1 m half wall) without changing the rest of the
+  room, or press **Delete** (or tick **Hidden**) to remove it as an opening
+  with no collision. Hidden walls of the selected sector show as dashed
+  outlines; **Show Hidden Walls** brings them back, **Reset Wall** undoes a
+  wall's own settings. Settings stay with the wall when you drag its corners.
+  (Walls between two sectors take their height from the neighbouring floor or
+  ceiling, so they can be hidden but not resized.)
+- **Simplify Sector** (dock) — remove points that don't change the selected
+  sectors' shapes: extra points along straight walls (within 1 mm) and seams
+  inside the sector. Points where a neighbouring sector's corner touches the
+  wall still show as handles, since rooms meet there.
+- **Has floor** / **Has ceiling** (dock) — remove a sector's floor or ceiling.
+- `J` (or **Join Sectors** in the dock) — join the selected sectors into one,
+  with the first-selected one's heights and materials. Walls between them
+  disappear.
+- **Wall thickness** — walls are thin by default. Give a room (in the dock's
+  **Wall thickness**, or with **Thicken** on the toolbar) or a single selected
+  wall a thickness and its walls become solid blocks built outward, with an
+  outer face and a top: the room keeps its size and its floor plan doesn't
+  change. Set 0 to make them thin again. Corners join up; a wall that stops
+  (at an opening into another room, or a single thick wall) gets a square end.
+  Only a room's outer walls count, not the edges around things inside it.
+  Where a wall faces another room instead of solid space (e.g. a room inside a
+  room), Thicken takes the thickness from that room. With the room selected,
+  thick walls show extra handles: drag an **outer corner** (blue) anywhere to
+  reshape the block (e.g. a tapered or angled wall), or drag an **outer face**
+  in or out to change that wall's thickness (dragging it all the way in makes
+  it thin). Hand-placed corners follow the room's corners; setting a new
+  thickness squares them up again. **Thicken toward:
+  Inward** or **Centered** shrink the room instead (cutting its floor).
 - Page Up / Page Down, or Alt+mouse wheel, over a floor or ceiling — raise or
   lower it one grid step (all selected sectors if the hovered one is selected).
 - `[` / `]` — smaller / larger grid. Delete — delete selected sectors.
@@ -60,7 +102,7 @@ Every edit can be undone with Ctrl+Z.
 
 ## Planned
 
-Splitting/joining sectors, per-wall textures, texture alignment, a stair
+Splitting sectors, per-wall textures, texture alignment, a stair
 builder, doors and lifts, lighting, a things palette, slopes, and rooms over
 rooms.
 
@@ -81,6 +123,7 @@ The repo is also a Godot project for developing the plugin:
   ```
   godot --headless --path . --script res://test/map_test.gd
   godot --headless --path . --script res://test/tool_test.gd
+  godot --headless --path . --script res://test/toolbar_test.gd
   godot --headless --path . --script res://test/player_test.gd
   ```
 

@@ -1,15 +1,14 @@
-[gd_scene format=3]
+[gd_scene format=3 uid="uid://bsmh40aywqdam"]
 
-[ext_resource type="Script" path="res://addons/godoombuilder/nodes/map.gd" id="1_bu8gv"]
-[ext_resource type="Script" path="res://addons/godoombuilder/core/map_data.gd" id="2_1rdli"]
-[ext_resource type="Script" path="res://addons/godoombuilder/core/sector.gd" id="3_tjuuh"]
-[ext_resource type="Material" path="res://test/materials/demo_ceiling.tres" id="4_cyi7p"]
-[ext_resource type="Material" path="res://test/materials/demo_floor.tres" id="5_pugwu"]
-[ext_resource type="Material" path="res://test/materials/demo_wall.tres" id="6_okmyw"]
-[ext_resource type="Material" path="res://test/materials/demo_step.tres" id="7_odf88"]
-[ext_resource type="Material" path="res://test/materials/demo_slime.tres" id="8_nq7xy"]
+[ext_resource type="Script" uid="uid://snpxrrg27mbs" path="res://addons/godoombuilder/nodes/map.gd" id="1_bu8gv"]
+[ext_resource type="Script" uid="uid://c4wp655fidglt" path="res://addons/godoombuilder/core/map_data.gd" id="2_1rdli"]
+[ext_resource type="Script" uid="uid://dsxyp0cqi5w88" path="res://addons/godoombuilder/core/sector.gd" id="3_tjuuh"]
+[ext_resource type="Material" uid="uid://buthw8ig3wkl4" path="res://test/materials/demo_ceiling.tres" id="4_cyi7p"]
+[ext_resource type="Material" uid="uid://cbglbvfkeuot8" path="res://test/materials/demo_floor.tres" id="5_pugwu"]
+[ext_resource type="Material" uid="uid://ccybjrtw56bju" path="res://test/materials/demo_wall.tres" id="6_okmyw"]
+[ext_resource type="Material" uid="uid://byihhtqvgx6h4" path="res://test/materials/demo_step.tres" id="7_odf88"]
+[ext_resource type="Material" uid="uid://dpwhsxy1hsfsh" path="res://test/materials/demo_slime.tres" id="8_nq7xy"]
 [ext_resource type="PackedScene" path="res://test/player/fps_player.tscn" id="9_al0uj"]
-[ext_resource type="Script" path="res://test/player/fps_player.gd" id="10_gx0wo"]
 
 [sub_resource type="Environment" id="Environment_01e7p"]
 background_mode = 1
@@ -19,7 +18,7 @@ ambient_light_color = Color(0.6, 0.6, 0.65, 1)
 ambient_light_energy = 0.55
 tonemap_mode = 2
 
-[sub_resource type="Resource" id="Resource_uwowd"]
+[sub_resource type="Resource" id="Resource_6p8kv"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(2.5, 6, 1.5, 6, 1.5, 9, 2.5, 9, 2.5, 10, 0, 10, 0, 0, 2.5, 0), PackedVector2Array(3.3333, 10, 2.5, 10, 2.5, 9, 3.3333, 9), PackedVector2Array(3.3333, 2, 3, 2, 3, 3, 3.3333, 3, 3.3333, 6, 2.5, 6, 2.5, 0, 3.3333, 0), PackedVector2Array(7.6667, 2, 7.5, 2, 7.5, 8, 7.6667, 8, 7.6667, 10, 3.3333, 10, 3.3333, 9, 4.5, 9, 4.5, 6, 3.3333, 6, 3.3333, 3, 4, 3, 4, 2, 3.3333, 2, 3.3333, 0, 7.6667, 0), PackedVector2Array(12, 10, 7.6667, 10, 7.6667, 8, 12, 8), PackedVector2Array(12, 2, 7.6667, 2, 7.6667, 0, 12, 0)])
 ceiling_height = 5.0
@@ -27,7 +26,7 @@ floor_material = ExtResource("5_pugwu")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_n5jil"]
+[sub_resource type="Resource" id="Resource_bu8gv"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(7.5, 2, 8, 2, 8, 8, 7.5, 8)])
 floor_height = 0.25
@@ -36,7 +35,7 @@ floor_material = ExtResource("7_odf88")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_6xnr8"]
+[sub_resource type="Resource" id="Resource_1rdli"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(8, 2, 8.5, 2, 8.5, 8, 8, 8)])
 floor_height = 0.5
@@ -45,7 +44,7 @@ floor_material = ExtResource("7_odf88")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_t3e4r"]
+[sub_resource type="Resource" id="Resource_tjuuh"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(8.5, 2, 9, 2, 9, 8, 8.5, 8)])
 floor_height = 0.75
@@ -54,7 +53,7 @@ floor_material = ExtResource("7_odf88")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_xlxnj"]
+[sub_resource type="Resource" id="Resource_cyi7p"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(9, 2, 12, 2, 12, 8, 9, 8)])
 floor_height = 1.0
@@ -63,7 +62,7 @@ floor_material = ExtResource("5_pugwu")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_s1uib"]
+[sub_resource type="Resource" id="Resource_pugwu"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(1.5, 6, 4.5, 6, 4.5, 9, 1.5, 9)])
 floor_height = -0.75
@@ -72,7 +71,7 @@ floor_material = ExtResource("5_pugwu")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_do130"]
+[sub_resource type="Resource" id="Resource_okmyw"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(4, 10, 6, 10, 6, 16, 4, 16)])
 ceiling_height = 2.5
@@ -80,7 +79,7 @@ floor_material = ExtResource("5_pugwu")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_3yveg"]
+[sub_resource type="Resource" id="Resource_odf88"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(4.3333, 18, 3, 18, 3, 22, 4.3333, 22, 4.3333, 24, 0, 24, 0, 16, 4.3333, 16), PackedVector2Array(10, 24, 4.3333, 24, 4.3333, 22, 7, 22, 7, 18, 4.3333, 18, 4.3333, 16, 10, 16)])
 floor_height = 0.5
@@ -88,57 +87,83 @@ floor_material = ExtResource("5_pugwu")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_qba40"]
+[sub_resource type="Resource" id="Resource_nq7xy"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(3, 18, 7, 18, 7, 22, 3, 22)])
 floor_height = 0.25
 ceiling_height = 7.0
+has_ceiling = false
 floor_material = ExtResource("8_nq7xy")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
+[sub_resource type="Resource" id="Resource_al0uj"]
+script = ExtResource("3_tjuuh")
+polygons = Array[PackedVector2Array]([PackedVector2Array(8.5, -2.5, 8.5, 0, 5.5, 0, 5.5, -2.5)])
+ceiling_height = 3.0
+has_ceiling = false
+wall_thickness = 1.0
+outer_corners = {
+Vector2i(55000, -25000): Vector2(0, -1.5),
+Vector2i(85000, -25000): Vector2(0, -1.5)
+}
+wall_overrides = Array[Dictionary]([{
+"a": Vector2(5.5, -1.5),
+"b": Vector2(8.5, -1.5),
+"hidden": true,
+"top": 0.5
+}, {
+"a": Vector2(5.5, -2.5),
+"b": Vector2(8.5, -2.5),
+"thickness": 0.25,
+"top": 1.0
+}, {
+"a": Vector2(5.5, 0),
+"b": Vector2(5.5, -2.5),
+"thickness": 1.0
+}])
+
 [sub_resource type="Resource" id="Resource_bs2jk"]
 script = ExtResource("2_1rdli")
-sectors = Array[ExtResource("3_tjuuh")]([SubResource("Resource_uwowd"), SubResource("Resource_n5jil"), SubResource("Resource_6xnr8"), SubResource("Resource_t3e4r"), SubResource("Resource_xlxnj"), SubResource("Resource_s1uib"), SubResource("Resource_do130"), SubResource("Resource_3yveg"), SubResource("Resource_qba40")])
+sectors = Array[ExtResource("3_tjuuh")]([SubResource("Resource_6p8kv"), SubResource("Resource_bu8gv"), SubResource("Resource_1rdli"), SubResource("Resource_tjuuh"), SubResource("Resource_cyi7p"), SubResource("Resource_pugwu"), SubResource("Resource_okmyw"), SubResource("Resource_odf88"), SubResource("Resource_nq7xy"), SubResource("Resource_al0uj")])
 
-[node name="DemoLevel" type="Node3D" unique_id=414561169]
+[node name="DemoLevel" type="Node3D" unique_id=249409237]
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=568653758]
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=15919186]
 environment = SubResource("Environment_01e7p")
 
-[node name="SectorMap" type="Node3D" parent="." unique_id=1241667615]
+[node name="SectorMap" type="Node3D" parent="." unique_id=36338971]
 script = ExtResource("1_bu8gv")
 data = SubResource("Resource_bs2jk")
 
-[node name="Light2" type="OmniLight3D" parent="." unique_id=1671340206]
+[node name="Light2" type="OmniLight3D" parent="." unique_id=1191248481]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 4, 5)
 light_energy = 1.6
 shadow_enabled = true
 omni_range = 11.0
 
-[node name="Light3" type="OmniLight3D" parent="." unique_id=1134909905]
+[node name="Light3" type="OmniLight3D" parent="." unique_id=2097895961]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10.5, 4, 5)
 light_energy = 1.6
 shadow_enabled = true
 omni_range = 11.0
 
-[node name="Light4" type="OmniLight3D" parent="." unique_id=1421020141]
+[node name="Light4" type="OmniLight3D" parent="." unique_id=1825755426]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 2.2, 13)
 light_energy = 1.6
 shadow_enabled = true
 omni_range = 11.0
 
-[node name="Light5" type="OmniLight3D" parent="." unique_id=1116185591]
+[node name="Light5" type="OmniLight3D" parent="." unique_id=2035409338]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 3.5, 20)
 light_energy = 1.6
 shadow_enabled = true
 omni_range = 11.0
 
-[node name="SlimeGlow" type="OmniLight3D" parent="." unique_id=2003414421]
+[node name="SlimeGlow" type="OmniLight3D" parent="." unique_id=1703751798]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 1, 20)
 light_color = Color(0.4, 1, 0.4, 1)
 light_energy = 1.2
 
-[node name="FPSPlayer" type="CharacterBody3D" parent="." unique_id=1515540641 instance=ExtResource("9_al0uj")]
+[node name="FPSPlayer" parent="." unique_id=1508946273 instance=ExtResource("9_al0uj")]
 transform = Transform3D(-1, 0, -8.742278e-08, 0, 1, 0, 8.742278e-08, 0, -1, 6, 0.05, 2)
-script = ExtResource("10_gx0wo")
