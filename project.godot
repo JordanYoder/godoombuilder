@@ -1,0 +1,16 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+
+config_version=5
+
+[application]
+
+config/name="GoDoomBuilder"
+config/description="Development project for the GoDoomBuilder plugin: a demo level, a test player and automated tests."
+run/main_scene="res://test/demo_level.tscn"
+config/features=PackedStringArray("4.7", "Forward Plus")
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/godoombuilder/plugin.cfg")
