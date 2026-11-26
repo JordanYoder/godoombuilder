@@ -26,13 +26,13 @@ static func rect(x0: float, z0: float, x1: float, z1: float) -> PackedVector2Arr
 
 
 ## The direction triangle t is seen from in Godot (its front side).
-static func tri_front(info: Dictionary, t: int) -> Vector3:
+static func tri_front(info: DMBuildInfo, t: int) -> Vector3:
 	var a: Vector3 = info.tris[t * 3]
 	return -(info.tris[t * 3 + 1] - a).cross(info.tris[t * 3 + 2] - a).normalized()
 
 
 ## Total area of faces of `part`, optionally only for one sector.
-static func part_area(info: Dictionary, part: int, sector := -1) -> float:
+static func part_area(info: DMBuildInfo, part: int, sector := -1) -> float:
 	var total := 0.0
 	for t in (info.tri_face as PackedInt32Array).size():
 		var f: int = info.tri_face[t]
@@ -40,6 +40,42 @@ static func part_area(info: Dictionary, part: int, sector := -1) -> float:
 			var a: Vector3 = info.tris[t * 3]
 			total += (info.tris[t * 3 + 1] - a).cross(info.tris[t * 3 + 2] - a).length() * 0.5
 	return total
+
+
+## True when the mesh's tangents match what SurfaceTool.generate_tangents
+## makes for it (vertices matched by position and normal).
+func _tangents_match(tmesh: ArrayMesh) -> bool:
+	var tan_ok := tmesh.get_surface_count() > 0
+	for surf in tmesh.get_surface_count():
+		var ours: Array = tmesh.surface_get_arrays(surf)
+		var st := SurfaceTool.new()
+		st.create_from(tmesh, surf)
+		st.generate_tangents()
+		var theirs: Array = st.commit_to_arrays()
+		var a_t: PackedFloat32Array = ours[Mesh.ARRAY_TANGENT]
+		var b_t: PackedFloat32Array = theirs[Mesh.ARRAY_TANGENT]
+		var a_v: PackedVector3Array = ours[Mesh.ARRAY_VERTEX]
+		var b_v: PackedVector3Array = theirs[Mesh.ARRAY_VERTEX]
+		var a_n: PackedVector3Array = ours[Mesh.ARRAY_NORMAL]
+		var b_n: PackedVector3Array = theirs[Mesh.ARRAY_NORMAL]
+		var a_uv: PackedVector2Array = ours[Mesh.ARRAY_TEX_UV]
+		var b_uv: PackedVector2Array = theirs[Mesh.ARRAY_TEX_UV]
+		# Match vertices by position, normal and UV (SurfaceTool may reorder them).
+		var lookup := {}
+		for i in b_v.size():
+			lookup[[DMMapData.key_of(Vector2(b_v[i].x, b_v[i].z)), roundi(b_v[i].y * 1000), b_n[i].snapped(Vector3.ONE * 0.01), b_uv[i].snapped(Vector2.ONE * 0.001)]] = i
+		for i in a_v.size():
+			var gj = lookup.get([DMMapData.key_of(Vector2(a_v[i].x, a_v[i].z)), roundi(a_v[i].y * 1000), a_n[i].snapped(Vector3.ONE * 0.01), a_uv[i].snapped(Vector2.ONE * 0.001)])
+			if gj == null:
+				tan_ok = false
+				continue
+			var ta := Vector3(a_t[i * 4], a_t[i * 4 + 1], a_t[i * 4 + 2])
+			var tb := Vector3(b_t[gj * 4], b_t[gj * 4 + 1], b_t[gj * 4 + 2])
+			if ta.dot(tb) < 0.99 or signf(a_t[i * 4 + 3]) != signf(b_t[gj * 4 + 3]):
+				if tan_ok:
+					print("  tangent mismatch at %s n=%s: ours %s w=%s, Godot's %s w=%s" % [a_v[i], a_n[i], ta, a_t[i * 4 + 3], tb, b_t[gj * 4 + 3]])
+				tan_ok = false
+	return tan_ok
 
 
 func defaults() -> DMSector:
@@ -183,11 +219,11 @@ func _run() -> void:
 	root.add_child(map)
 	map.ensure_built()
 	var hit := map.pick(Vector3(1, 10, 1), Vector3.DOWN)
-	check(not hit.is_empty() and hit.part == F and near(hit.point.y, 0.0), "pick from above hits the floor")
+	check(hit != null and hit.part == F and near(hit.point.y, 0.0), "pick from above hits the floor")
 	hit = map.pick(Vector3(1, 1, 1), Vector3.UP)
-	check(not hit.is_empty() and hit.part == C, "pick from inside looking up hits the ceiling")
+	check(hit != null and hit.part == C, "pick from inside looking up hits the ceiling")
 	hit = map.pick(Vector3(1, 1, 1), Vector3.LEFT)
-	check(not hit.is_empty() and hit.part == W, "pick sideways hits a wall")
+	check(hit != null and hit.part == W, "pick sideways hits a wall")
 	check(map.mesh_node().mesh != null, "map node has a mesh")
 	var body := map.collision_body()
 	var shape := body.get_child(0) as CollisionShape3D
@@ -542,7 +578,7 @@ func _run() -> void:
 	root.add_child(top_hit)
 	top_hit.ensure_built()
 	var top_pick := top_hit.pick(Vector3(80 - 0.25, 10, 2), Vector3.DOWN)
-	check(not top_pick.is_empty() and near(top_pick.point.y, 4.0) and top_pick.part == W, "the top of the thick wall is there (and can be clicked)")
+	check(top_pick != null and near(top_pick.point.y, 4.0) and top_pick.part == W, "the top of the thick wall is there (and can be clicked)")
 	await physics_frame
 	await physics_frame
 	var wall_ray := top_hit.get_world_3d().direct_space_state.intersect_ray(
@@ -595,6 +631,137 @@ func _run() -> void:
 	check(data.sectors[0].duplicate_sector().outer_corners.size() == 1, "it is copied with the sector (undo)")
 	tw = data.thicken_walls(0, 0.75, 1)
 	check(tw.ok and data.sectors[0].outer_corners.is_empty(), "setting a new thickness puts the corners back to square")
+
+	# 23. Copies keep every saved property (undo snapshots are copies).
+	var full := DMSector.new()
+	full.polygons = [rect(0, 0, 2, 2)]
+	full.floor_height = -1.5
+	full.ceiling_height = 7.0
+	full.has_ceiling = false
+	full.has_floor = false
+	full.wall_thickness = 0.3
+	full.outer_corners = {DMMapData.key_of(Vector2(0, 0)): Vector2(-1, -1)}
+	full.wall_overrides = [{"a": Vector2(0, 0), "b": Vector2(2, 0), "hidden": true}]
+	full.floor_material = StandardMaterial3D.new()
+	full.ceiling_material = StandardMaterial3D.new()
+	full.wall_material = StandardMaterial3D.new()
+	full.floor_uv_offset = Vector2(0.1, 0.2)
+	full.floor_uv_size = Vector2(2, 3)
+	full.floor_uv_rotation = 15.0
+	full.ceiling_uv_offset = Vector2(0.3, 0.4)
+	full.ceiling_uv_size = Vector2(4, 5)
+	full.ceiling_uv_rotation = 30.0
+	full.wall_uv_offset = Vector2(0.5, 0.6)
+	full.wall_uv_size = Vector2(6, 7)
+	full.wall_uv_rotation = 45.0
+	var full_copy := full.duplicate_sector()
+	var defaults_sector := DMSector.new()
+	for prop in full.get_property_list():
+		if not (prop.usage & PROPERTY_USAGE_STORAGE) or prop.name in ["resource_path", "resource_name", "resource_local_to_scene", "script"]:
+			continue
+		# Every saved property must differ from the default in this test, so
+		# a property added later without a test value (or a copy) is caught.
+		check_quiet(full.get(prop.name) != defaults_sector.get(prop.name), "test sector sets %s (add it to test 23)" % prop.name)
+		check_quiet(full_copy.get(prop.name) == full.get(prop.name), "duplicate_sector copies %s" % prop.name)
+	check(full_copy.polygons[0] == full.polygons[0] and not full_copy.has_floor, "duplicate_sector copies every saved property (incl. has_floor)")
+	# Undo round trip: a floorless sector stays floorless.
+	data = DMMapData.new()
+	data.add_loop(rect(0, 0, 4, 4), defaults())
+	data.sectors[0].has_floor = false
+	var snap2 := data.duplicate_data()
+	data.add_loop(rect(10, 0, 12, 2), defaults())
+	data.copy_from(snap2)
+	check(not data.sectors[0].has_floor, "undo keeps a removed floor removed")
+	data.add_loop(rect(1, 1, 2, 2), defaults())
+	check(not data.sectors[1].has_floor, "a sector drawn inside a floorless one has no floor either")
+
+	# 24. Tangents match what Godot would generate for the world-aligned UVs.
+	data = DMMapData.new()
+	data.add_loop(PackedVector2Array([Vector2(0, 0), Vector2(6, 0), Vector2(8, 3), Vector2(3, 7), Vector2(-1, 4)]), defaults())
+	data.add_loop(rect(1, 1, 3, 3), defaults())
+	data.sectors[1].floor_height = 1.0
+	data.sectors[1].ceiling_height = 3.0
+	data.sectors[0].wall_thickness = 0.5
+	var tan_ok := true
+	# Plain world alignment, then rotated, sized, mirrored and per-wall alignment.
+	for variant in 2:
+		if variant == 1:
+			data.sectors[0].set_uv_values(F, Vector2(0.3, 0.1), Vector2(2, -0.5), 30.0)
+			data.sectors[0].set_uv_values(C, Vector2(0, 0.7), Vector2(-1.5, 1), -60.0)
+			data.sectors[0].set_uv_values(W, Vector2(0.2, 0), Vector2(1, 2), 90.0)
+			data.sectors[1].set_uv_values(W, Vector2.ZERO, Vector2(-1, 1), 200.0)
+			data.sectors[0].set_wall_override(Vector2(0, 0), Vector2(6, 0), {"uv_rotation": 10.0, "uv_size": Vector2(0.5, -3)})
+		tan_ok = _tangents_match(DMBuilder.to_mesh(DMBuilder.build(data))) and tan_ok
+	check(tan_ok, "tangents match Godot's generated ones (normal maps work), also with rotated / mirrored textures")
+	# 25. Collision is built from the mesh triangles, and can lag behind a
+	# rebuild(false) until ensure_built().
+	var cmap := DMMap.new()
+	cmap.data = DMMapData.new()
+	cmap.data.add_loop(rect(0, 0, 4, 4), defaults())
+	cmap.rebuild()
+	var cshape := cmap.collision_body().get_child(0) as CollisionShape3D
+	check(cshape.shape is ConcavePolygonShape3D and (cshape.shape as ConcavePolygonShape3D).get_faces().size() == (cmap.build_info.tris as PackedVector3Array).size(),
+		"collision has one face per mesh triangle")
+	cmap.data.add_loop(rect(10, 0, 12, 2), defaults())
+	cmap.rebuild(false)
+	var stale := cmap.is_collision_stale() and (cshape.shape as ConcavePolygonShape3D).get_faces().size() != (cmap.build_info.tris as PackedVector3Array).size()
+	cmap.ensure_built()
+	check(stale and not cmap.is_collision_stale() and (cshape.shape as ConcavePolygonShape3D).get_faces().size() == (cmap.build_info.tris as PackedVector3Array).size(),
+		"rebuild(false) defers collision; ensure_built() catches it up")
+	cmap.free()
+
+	# 26. check() reports damaged data; bad indices fail safely.
+	data = DMMapData.new()
+	data.add_loop(rect(0, 0, 4, 4), defaults())
+	check(data.check().is_empty(), "a good map has no problems")
+	var broken := DMSector.new()
+	broken.polygons = [PackedVector2Array([Vector2(0, 0), Vector2(1, 0)]), rect(4, 5, 5, 4), PackedVector2Array([Vector2(0, 0), Vector2(NAN, 1), Vector2(1, 1)])]
+	broken.floor_height = 3.0
+	broken.ceiling_height = 1.0
+	data.sectors.append(broken)
+	var problems := data.check()
+	check(problems.size() == 4, "check() finds the bad pieces and heights (%s)" % ", ".join(problems))
+	check(data.join_sectors([]) == -1 and data.join_sectors([0, 9]) == -1 and data.sectors.size() == 2, "join_sectors with bad indices does nothing")
+	check(not data.thicken_walls(9, 0.5, 1).ok and data.simplify_sector(9) == 0 and data.boundary_loops(9).is_empty(), "other edits with a bad index do nothing")
+
+	# 27. The builder's edge grid finds every edge whose box touches another's.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1234
+	var ga := PackedVector2Array()
+	var gb := PackedVector2Array()
+	for i in 300:
+		var p0 := Vector2(rng.randf_range(-20, 20), rng.randf_range(-20, 20))
+		ga.append(p0)
+		gb.append(p0 + Vector2(rng.randf_range(-1, 1), rng.randf_range(-1, 1)) * (rng.randf_range(0, 12) if i % 10 == 0 else rng.randf_range(0, 2)))
+	var grid := DMBuilder.EdgeGrid.new(ga, gb, DMGeo.LINE_EPS)
+	var grid_ok := true
+	for gk in ga.size():
+		var near_found := {}
+		for gj in grid.near(gk):
+			near_found[gj] = true
+		var bk := Rect2(ga[gk], Vector2.ZERO).expand(gb[gk]).grow(DMGeo.LINE_EPS)
+		for gj in ga.size():
+			if gj != gk and bk.intersects(Rect2(ga[gj], Vector2.ZERO).expand(gb[gj]).grow(DMGeo.LINE_EPS), true) and not near_found.has(gj):
+				grid_ok = false
+	check(grid_ok, "the edge grid never misses a nearby edge")
+
+	# 28. Nearly parallel edges (found by fuzz_test): Godot's own segment and
+	# point-in-polygon tests report false hits there; DMGeo's don't.
+	var needle := PackedVector2Array([Vector2(2.0411, -3.6521), Vector2(2.0, -3.75), Vector2(2.038, -3.6487),
+		Vector2(1.5, -3.0595), Vector2(1.5, -4.5), Vector2(2.8152, -4.5)])
+	check(DMGeo.is_simple(needle), "a thin spike next to a nearly parallel edge is not a crossing")
+	var spiky := PackedVector2Array([Vector2(3.75, 1.75), Vector2(4.75, 4.75), Vector2(1.5, 5.0), Vector2(0.1788, 2.838),
+		Vector2(0.5, 0.75), Vector2(0.5, 0.0), Vector2(0.1509, 2.7925), Vector2(-0.5, 1.7273), Vector2(-0.5, 0.0385),
+		Vector2(0.2238, -0.407), Vector2(1.75, 0.0), Vector2(1.25, -0.5), Vector2(2.0, -0.5), Vector2(2.0, -1.5)])
+	check(not DMGeo.point_in_polygon(Vector2(-7.774847, -11.5098), spiky) and DMGeo.point_in_polygon(Vector2(3.0, 3.0), spiky),
+		"point_in_polygon: far outside is outside, inside is inside")
+	# A loop touching itself at a point splits into two pieces.
+	var eight := DMGeo.split_pinches(PackedVector2Array([Vector2(0, 0), Vector2(2, 0), Vector2(2, 2), Vector2(4, 2),
+		Vector2(4, 4), Vector2(2, 4), Vector2(2, 2), Vector2(0, 2)]))
+	check(eight.size() == 2 and DMGeo.is_simple(eight[0]) and DMGeo.is_simple(eight[1]), "a figure eight splits at its pinch")
+	var tee := DMGeo.split_pinches(PackedVector2Array([Vector2(0, 0), Vector2(4, 0), Vector2(4, 4), Vector2(2, 4),
+		Vector2(3, 2), Vector2(2, 0.0), Vector2(1, 2), Vector2(2, 4), Vector2(0, 4)]))
+	check(tee.size() >= 2, "a corner touching another edge splits the loop there")
 
 	map.queue_free()
 	print("RESULT: %s (%d failures)" % ["OK" if fails == 0 else "FAILED", fails])

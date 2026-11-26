@@ -6,14 +6,10 @@ extends SceneTree
 var fails := 0
 
 
+## The real editor with every action the toolbar calls only recorded.
 class FakePlugin:
-	extends RefCounted
+	extends DMEditor
 	var calls: Array[String] = []
-	var map: DMMap
-	var tool := DMTool.new()
-	var units := 0
-	var grid_step := 0.5
-	var wall_thickness := 0.25
 	func set_drawing(on: bool, rect := false) -> void:
 		calls.append("draw %s %s" % [on, rect])
 		if on:
@@ -31,9 +27,15 @@ class FakePlugin:
 		grid_step = m
 		calls.append("grid %s" % m)
 	func set_units(u: int) -> void:
-		units = u
+		units = u as DMUnits.Units
 		calls.append("units %d" % u)
-	func _save_settings() -> void: pass
+	func copy_selected() -> void: calls.append("copy")
+	func begin_paste() -> void: calls.append("paste")
+	func transform_selected(kind: String) -> void: calls.append("transform " + kind)
+	func split_selected_wall() -> void: calls.append("split wall")
+	func curve_selected_wall() -> void: calls.append("curve wall")
+	func make_stairs() -> void: calls.append("stairs")
+	func split_into_steps() -> void: calls.append("split steps")
 
 
 func check(ok: bool, what: String) -> void:
@@ -54,7 +56,7 @@ func _run() -> void:
 	plugin.map.data.add_loop(PackedVector2Array([Vector2(4, 0), Vector2(8, 0), Vector2(8, 4), Vector2(4, 4)]), DMSector.new())
 	plugin.map.data.sectors[0].has_ceiling = false
 	var bar := DMToolbar.new()
-	bar.plugin = plugin
+	bar.editor = plugin
 	var panel := PanelContainer.new()
 	panel.position = Vector2(10, 10)
 	panel.add_child(bar)
@@ -86,7 +88,7 @@ func _run() -> void:
 	bar.ceiling_check.button_pressed = true
 	check(plugin.calls.back() == "ceiling true", "Ceiling checkbox sets the selection's ceiling")
 	plugin.tool.selected = [0]
-	plugin.tool.selected_wall = {"sector": 0, "a": Vector2(0, 0), "b": Vector2(4, 0)}
+	plugin.tool.selected_wall = DMTool.Wall.new(0, Vector2(0, 0), Vector2(4, 0))
 	bar.refresh()
 	check(bar.delete_button.text == "Hide Wall", "with a wall selected, Delete becomes Hide Wall")
 	check(bar.thicken_button.text == "Thicken Wall", "with a wall selected, Thicken works on that wall")
@@ -102,6 +104,33 @@ func _run() -> void:
 	bar.thickness.value = 16.0
 	check(is_equal_approx(plugin.wall_thickness, 0.5), "typing 16 du sets 0.5 m thickness")
 
+	# The Edit menu: each item calls its action; unusable ones are greyed out.
+	var popup := bar.edit_menu.get_popup()
+	var item_ids := {}
+	for i in DMToolbar.EDIT_ACTIONS.size():
+		if not DMToolbar.EDIT_ACTIONS[i].is_empty():
+			item_ids[DMToolbar.EDIT_ACTIONS[i]] = i
+	var disabled := func(action: String) -> bool: return popup.is_item_disabled(popup.get_item_index(item_ids[action]))
+	plugin.tool.selected = [0]
+	plugin.tool.selected_wall = null
+	bar.refresh()
+	check(disabled.call("paste") and disabled.call("split_wall") and disabled.call("stairs") and not disabled.call("split_steps")
+		and not disabled.call("rotate_cw"), "Edit menu: paste needs a copy, wall items a wall, stairs two sectors")
+	plugin.clipboard.append(DMSector.new())
+	plugin.tool.selected = [0, 1]
+	plugin.tool.selected_wall = null
+	bar.refresh()
+	check(not disabled.call("paste") and not disabled.call("stairs") and disabled.call("split_steps"), "Edit menu updates with the selection and clipboard")
+	var expected := {"copy": "copy", "paste": "paste", "rotate_cw": "transform rotate_cw", "mirror_z": "transform mirror_z",
+		"split_wall": "split wall", "curve_wall": "curve wall", "stairs": "stairs", "split_steps": "split steps"}
+	var menu_ok := true
+	for action in expected:
+		popup.id_pressed.emit(item_ids[action])
+		if plugin.calls.back() != expected[action]:
+			menu_ok = false
+			print("  menu item %s called %s" % [action, plugin.calls.back()])
+	check(menu_ok, "every Edit menu item calls its action")
+
 	await process_frame
 	await process_frame
 	if DisplayServer.get_name() != "headless":
@@ -109,5 +138,6 @@ func _run() -> void:
 			"user://toolbar.png")
 		print("saved toolbar.png to ", ProjectSettings.globalize_path("user://toolbar.png"))
 	plugin.map.free()
+	plugin.dispose()
 	print("RESULT: %s (%d failures)" % ["OK" if fails == 0 else "FAILED", fails])
 	quit(1 if fails else 0)

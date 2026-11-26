@@ -3,43 +3,24 @@
 extends SceneTree
 
 
-## Stands in for the editor plugin (same methods the tool calls).
+## The real editor, with undo steps and messages recorded instead of sent
+## to Godot, and a few actions only counted.
 class FakePlugin:
-	extends RefCounted
-	var grid_step := 0.5
-	var units := 0
-	var map: DMMap
-	var defaults := DMSector.new()
-	var tool: DMTool
+	extends DMEditor
 	var grid_shifts := 0
-	func update_overlays() -> void: pass
-	func on_tool_changed() -> void: pass
-	func commit_loop(points: PackedVector2Array) -> Dictionary:
-		var r := map.data.add_loop(points, defaults)
-		map.rebuild()
-		return r
-	func nudge_heights(targets: Array[int], part: int, delta: float) -> void:
-		for i in targets:
-			if part == DMBuilder.Part.FLOOR:
-				map.data.sectors[i].floor_height += delta
-			else:
-				map.data.sectors[i].ceiling_height += delta
-		map.rebuild()
-	func shift_grid(d: int) -> void: grid_shifts += d
 	var notes: Array[String] = []
-	func notify(msg: String, _severity := 0) -> void: notes.append(msg)
 	var commits: Array[String] = []
 	var joins := 0
 	var hides := 0
+	func _record_undo(action: String, _before: DMMapData, _after: DMMapData, _merge: bool) -> void:
+		commits.append(action)
+	func notify(msg: String, _severity := Severity.WARNING) -> void: notes.append(msg)
+	func shift_grid(d: int) -> void: grid_shifts += d
 	func set_wall_hidden(_h: bool) -> void: hides += 1
 	func join_selected() -> void: joins += 1
-	func commit_snapshot(action: String, _before: DMMapData) -> void:
-		commits.append(action)
-		map.rebuild()
-	func delete_selected() -> void:
-		map.data.delete_sectors(tool.selected)
-		tool.selected.clear()
-		map.rebuild()
+	func copy_selected() -> void:
+		super.copy_selected()
+		commits.append("Copy")
 
 
 var fails := 0
@@ -137,11 +118,8 @@ func _run() -> void:
 	map.data = DMMapData.new()
 	vp.add_child(map)
 	plugin = FakePlugin.new()
-	plugin.map = map
-	tool = DMTool.new()
-	tool.plugin = plugin
-	plugin.tool = tool
-	tool.set_map(map)
+	tool = plugin.tool
+	plugin.set_map(map)
 
 	# Draw a room with D, four clicks slightly off-grid, and a click on the first point.
 	check(key(KEY_D) == EditorPlugin.AFTER_GUI_INPUT_STOP and tool.mode == DMTool.Mode.DRAW, "D starts drawing")
@@ -310,14 +288,13 @@ func _run() -> void:
 	map2.data.add_loop(rect2(0, 0, 6, 6), DMSector.new())
 	map2.data.add_loop(rect2(6, 0, 10, 6), DMSector.new())
 	map2.rebuild()
-	plugin.map = map2
-	tool.set_map(map2)
+	plugin.set_map(map2)
 	cam.global_transform = Transform3D(Basis.from_euler(Vector3(-PI / 2.0, 0, 0)), Vector3(105, 25, 3))
 	var w := func(x: float, z: float) -> Vector2: return cam.unproject_position(Vector3(100 + x, 0, z))
 	click(w.call(3, 3))
 	check(tool.selected == [0], "select the left room")
 	move(w.call(0, 0))
-	check(tool.handle.get("kind", "") == "vertex", "hovering a selected room's corner shows a corner handle")
+	check(tool.handle != null and tool.handle.kind == DMTool.Handle.Kind.VERTEX, "hovering a selected room's corner shows a corner handle")
 	drag_from_to(w.call(0, 0), w.call(-2.1, 0.1))
 	check(absf(map2.data.sectors[0].area() - 42.0) < 0.01 and plugin.commits.back() == "Move Corner",
 		"dragging a corner reshapes the room (area %.2f)" % map2.data.sectors[0].area())
@@ -337,20 +314,20 @@ func _run() -> void:
 	move(w.call(4, 2))
 	key(KEY_ESCAPE)
 	mouse_button(w.call(4, 2), false)
-	check(absf(map2.data.sectors[0].area() - areas[0]) < 0.01 and tool.drag.is_empty(), "Esc cancels a drag")
+	check(absf(map2.data.sectors[0].area() - areas[0]) < 0.01 and tool.drag == null, "Esc cancels a drag")
 
 	# Clicking a wall selects just that wall; Delete hides it.
 	tool.selected = []
 	cam.global_transform = Transform3D(Basis(), Vector3(102, 2, 3))
 	click(cam.unproject_position(Vector3(102, 2, -10)))
-	var wall_ok: bool = not tool.selected_wall.is_empty() and tool.selected.size() == 1
+	var wall_ok: bool = tool.selected_wall != null and tool.selected.size() == 1
 	check(wall_ok, "clicking a wall selects that wall (%s)" % str(tool.selected_wall))
 	if wall_ok:
 		check(tool.selected_wall_faces().size() > 0, "the selected wall's faces are found for highlighting")
 	key(KEY_DELETE)
 	check(plugin.hides == 1, "Delete with a wall selected hides the wall instead of deleting the sector")
 	click(cam.unproject_position(Vector3(102, 0, 1)))
-	check(tool.selected_wall.is_empty() and tool.selected.size() == 1, "clicking a floor selects the sector, not a wall")
+	check(tool.selected_wall == null and tool.selected.size() == 1, "clicking a floor selects the sector, not a wall")
 
 	# Thick walls: outer corners and outer faces have handles.
 	var map3 := DMMap.new()
@@ -360,21 +337,20 @@ func _run() -> void:
 	map3.data.add_loop(rect2(0, 0, 4, 4), DMSector.new())
 	map3.data.sectors[0].wall_thickness = 0.5
 	map3.rebuild()
-	plugin.map = map3
-	tool.set_map(map3)
+	plugin.set_map(map3)
 	cam.global_transform = Transform3D(Basis.from_euler(Vector3(-PI / 2.0, 0, 0)), Vector3(202, 14, 2))
 	var w3 := func(x: float, z: float) -> Vector2: return cam.unproject_position(Vector3(200 + x, 0, z))
 	click(w3.call(2, 2))
 	check(tool.selected == [0], "select the thick-walled room")
 	move(w3.call(-0.5, -0.5))
-	check(tool.handle.get("kind", "") == "outer_vertex", "the thick wall's outer corner has a handle")
+	check(tool.handle != null and tool.handle.kind == DMTool.Handle.Kind.OUTER_VERTEX, "the thick wall's outer corner has a handle")
 	drag_from_to(w3.call(-0.5, -0.5), w3.call(-1.5, -1.0))
 	var oc: Dictionary = map3.data.sectors[0].outer_corners
 	check(oc.size() == 1 and (oc.values()[0] as Vector2).is_equal_approx(Vector2(-1.5, -1.0)) and plugin.commits.back() == "Move Wall Corner",
 		"dragging the outer corner places it there (%s)" % str(oc))
 	check(absf(map3.data.sectors[0].area() - 16.0) < 0.001, "the room itself doesn't change")
 	move(w3.call(4.5, 2))
-	check(tool.handle.get("kind", "") == "outer_edge", "the thick wall's outer face has a handle")
+	check(tool.handle != null and tool.handle.kind == DMTool.Handle.Kind.OUTER_EDGE, "the thick wall's outer face has a handle")
 	drag_from_to(w3.call(4.5, 2), w3.call(5.6, 2.3))
 	var east := map3.data.sectors[0].wall_override(Vector2(4, 0), Vector2(4, 4))
 	check(absf(float(east.get("thickness", -1)) - 1.5) < 0.001 and plugin.commits.back() == "Set Wall Thickness",
@@ -388,8 +364,130 @@ func _run() -> void:
 	key(KEY_ESCAPE)
 	mouse_button(w3.call(-3, -3), false)
 	check((map3.data.sectors[0].outer_corners.values()[0] as Vector2).is_equal_approx(Vector2(-1.5, -1.0)), "Esc cancels an outer-corner drag")
+	# Copy, paste (rotated), double-click to add a corner, Delete to remove it.
+	var map4 := DMMap.new()
+	map4.position = Vector3(300, 0, 0)
+	map4.data = DMMapData.new()
+	vp.add_child(map4)
+	map4.data.add_loop(rect2(0, 0, 4, 2), DMSector.new())
+	map4.data.sectors[0].floor_height = 0.5
+	map4.rebuild()
+	plugin.set_map(map4)
+	cam.global_transform = Transform3D(Basis.from_euler(Vector3(-PI / 2.0, 0, 0)), Vector3(305, 20, 4))
+	var w4 := func(x: float, z: float) -> Vector2: return cam.unproject_position(Vector3(300 + x, 0.5, z))
+	click(w4.call(2, 1))
+	check(tool.selected == [0], "select the room to copy")
+	var ctrl_key := func(code: Key) -> int:
+		var ke := InputEventKey.new()
+		ke.keycode = code
+		ke.ctrl_pressed = true
+		ke.pressed = true
+		return tool.handle_input(cam, ke)
+	ctrl_key.call(KEY_C)
+	check(plugin.clipboard.size() == 1, "Ctrl+C copies the selection")
+	ctrl_key.call(KEY_V)
+	check(tool.mode == DMTool.Mode.PASTE, "Ctrl+V starts placing the copy")
+	key(KEY_R)
+	move(w4.call(6, 0))
+	overlay.queue_redraw()
+	await process_frame
+	click(w4.call(6, 0))
+	check(tool.mode == DMTool.Mode.SELECT and map4.data.sectors.size() == 2 and plugin.commits.back() == "Paste Sectors",
+		"clicking places the copy")
+	var pasted_box := map4.data.bounds_of([1])
+	check(pasted_box.position.is_equal_approx(Vector2(6, 0)) and pasted_box.size.is_equal_approx(Vector2(2, 4)) and tool.selected == [1],
+		"R turned it 90° before placing, its corner at the cursor; the copy is selected")
+	check(map4.data.sectors[1].floor_height == 0.5, "the copy keeps its floor height")
+	ctrl_key.call(KEY_V)
+	key(KEY_ESCAPE)
+	check(tool.mode == DMTool.Mode.SELECT and map4.data.sectors.size() == 2, "Esc cancels a paste")
+	# Double-click the selected room's wall to add a corner on the grid.
+	click(w4.call(2, 1))
+	var wall_point: Vector2 = w4.call(1.0, 2.0)
+	move(wall_point)
+	check(tool.handle != null and tool.handle.kind == DMTool.Handle.Kind.EDGE, "hovering the selected room's wall shows its handle")
+	click(wall_point)
+	var dbl := InputEventMouseButton.new()
+	dbl.button_index = MOUSE_BUTTON_LEFT
+	dbl.position = wall_point
+	dbl.pressed = true
+	dbl.double_click = true
+	tool.handle_input(cam, dbl)
+	mouse_button(wall_point, false)
+	var has_new := false
+	for v in map4.data.sectors[0].polygons[0]:
+		if v.is_equal_approx(Vector2(1, 2)):
+			has_new = true
+	check(has_new and plugin.commits.back() == "Split Wall", "double-clicking a wall adds a corner there")
+	move(w4.call(1.0, 2.0))
+	check(tool.handle != null and tool.handle.kind == DMTool.Handle.Kind.VERTEX, "the new corner has a handle")
+	key(KEY_DELETE)
+	check(map4.data.sectors[0].polygons[0].size() == 4 and plugin.commits.back() == "Remove Corner" and map4.data.sectors.size() == 2,
+		"Delete over a corner removes just the corner")
+
+	# Box select: drag from a floor across the rooms (the left mouse held).
+	var box_drag := func(a: Vector2, b: Vector2, shift: bool, cancel: bool) -> void:
+		move(a)
+		var down := InputEventMouseButton.new()
+		down.button_index = MOUSE_BUTTON_LEFT
+		down.position = a
+		down.pressed = true
+		down.shift_pressed = shift
+		tool.handle_input(cam, down)
+		for t: float in [0.3, 0.7, 1.0]:
+			var mm := InputEventMouseMotion.new()
+			mm.position = a.lerp(b, t)
+			mm.button_mask = MOUSE_BUTTON_MASK_LEFT
+			tool.handle_input(cam, mm)
+		if cancel:
+			key(KEY_ESCAPE)
+		var up := InputEventMouseButton.new()
+		up.button_index = MOUSE_BUTTON_LEFT
+		up.position = b
+		tool.handle_input(cam, up)
+	box_drag.call(w4.call(0.5, 0.5), w4.call(9, 5), false, false)
+	check(tool.selected.size() == 2 and tool.selected.has(0) and tool.selected.has(1) and not tool.box_active,
+		"dragging from a floor across both rooms box-selects them")
+	click(w4.call(2, 1))
+	box_drag.call(w4.call(6.5, 0.5), w4.call(9, 5), true, false)
+	check(tool.selected.size() == 2, "Shift+drag adds the boxed rooms to the selection")
+	click(w4.call(2, 1))
+	box_drag.call(w4.call(2, 1), w4.call(2, 1) + Vector2(3, 2), false, false)
+	check(tool.selected == [0], "a small wobble while clicking is still a click")
+	box_drag.call(w4.call(2.5, 1.5), w4.call(9, 5), false, true)
+	check(tool.selected == [0] and not tool.box_active, "Esc cancels a box select")
+
+	# Texture tools over the surface under the mouse.
+	click(w4.call(2, 1))
+	move(w4.call(2, 1))
+	var alt_key := func(code: Key, shift := false) -> int:
+		var ke := InputEventKey.new()
+		ke.keycode = code
+		ke.alt_pressed = true
+		ke.shift_pressed = shift
+		ke.pressed = true
+		return tool.handle_input(cam, ke)
+	var r_alt: int = alt_key.call(KEY_RIGHT)
+	check(r_alt == EditorPlugin.AFTER_GUI_INPUT_STOP and map4.data.sectors[0].floor_uv_offset.is_equal_approx(Vector2(-0.5, 0))
+		and plugin.commits.back() == "Move Texture", "Alt+Right over a floor moves its texture one grid step")
+	alt_key.call(KEY_UP, true)
+	check(map4.data.sectors[0].floor_uv_offset.is_equal_approx(Vector2(-0.5, 0.0625)), "Alt+Shift+Up moves it an eighth of a step")
+	check(map4.data.sectors[1].floor_uv_offset == Vector2.ZERO, "the other room's texture stays")
+	var cs_key := func(code: Key) -> int:
+		var ke := InputEventKey.new()
+		ke.keycode = code
+		ke.ctrl_pressed = true
+		ke.shift_pressed = true
+		ke.pressed = true
+		return tool.handle_input(cam, ke)
+	cs_key.call(KEY_C)
+	move(w4.call(7, 2))
+	cs_key.call(KEY_V)
+	check(map4.data.sectors[1].floor_uv_offset.is_equal_approx(Vector2(-0.5, 0.0625)) and plugin.commits.back() == "Paste Texture Alignment",
+		"Ctrl+Shift+C / V copy one floor's alignment onto another")
 	overlay.queue_redraw()
 	await process_frame
 
+	plugin.dispose()
 	print("RESULT: %s (%d failures)" % ["OK" if fails == 0 else "FAILED", fails])
 	quit(1 if fails else 0)

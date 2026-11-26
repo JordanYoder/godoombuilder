@@ -1,0 +1,48 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GODOT_VERSION: 4.7.2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Godot
+        run: |
+          curl -fsSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip
+          mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" godot
+          chmod +x godot
+
+      # .godot/ isn't committed, so let Godot import the project once (this
+      # registers the class_name scripts the tests use).
+      - name: Import project
+        run: ./godot --headless --path . --import
+
+      # Every addon script must pass strict typing (no untyped or unsafe
+      # code): see test/strict_check.sh.
+      - name: Strict typing
+        run: GODOT=./godot bash test/strict_check.sh
+
+      - name: Run tests
+        run: |
+          status=0
+          for t in map_test features_test editor_test tool_test toolbar_test player_test fuzz_test; do
+            echo "::group::$t"
+            ./godot --headless --path . --script "res://test/$t.gd" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+      # A longer randomized search with fresh seeds on each run; it reports
+      # failing seeds without failing the build (rerun one locally with
+      # -- --seed=N --verbose).
+      - name: Long fuzz search
+        continue-on-error: true
+        run: ./godot --headless --path . --script res://test/fuzz_test.gd -- --rounds=500 --start=$(( GITHUB_RUN_NUMBER * 1000 + 100000 ))

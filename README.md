@@ -54,6 +54,12 @@ sections are folded away until you open them.
   dock). A typed side with the other left free follows the mouse.
 - Typed numbers are in the current units (e.g. `64` = 2 m in Doom units).
 - Click — select a sector; Shift+click adds to the selection.
+- Drag from a floor (or ceiling) across rooms — box select: every sector
+  whose middle is inside the box. Shift+drag adds to the selection, Esc
+  cancels. (A drag that starts on empty space is still Godot's own.)
+- **Select Similar** (dock, with the sector to compare selected first; or the
+  **Edit** menu) — select every sector with the same floor height, ceiling
+  height, both, or the same floor / ceiling / wall material or all three.
 - Drag a selected sector's corner (square handles) or wall line to reshape it.
   Corners shared with neighbouring sectors, and walls meeting it, move along,
   so rooms stay connected. Moves that would cross or overlap are refused; Esc
@@ -91,6 +97,56 @@ sections are folded away until you open them.
   it thin). Hand-placed corners follow the room's corners; setting a new
   thickness squares them up again. **Thicken toward:
   Inward** or **Centered** shrink the room instead (cutting its floor).
+- **Add / remove corners** — double-click a selected sector's wall to add a
+  corner there (on the grid if a grid point lies on the wall; Shift: exactly
+  under the mouse), or press **Split Wall** with a wall selected to split it in
+  the middle. Rooms sharing the wall get the corner too, so dragging it bends
+  both. Delete over a corner handle removes the corner (its two walls become
+  one). Dragging a corner onto the next one merges them.
+- **Curve Wall** (select a wall; dock or toolbar **Edit** menu) — bend the
+  wall into an arc of **Segments** straight pieces whose middle moves
+  **Bulge**: positive outward (the room grows), negative into the room, up to
+  a half circle. A room sharing the wall bends with it, and corners on the
+  wall move onto the arc.
+- `Ctrl+C` / `Ctrl+V` — copy the selected sectors, then place copies: the
+  copy follows the mouse (grid / corner snapped), `R` / `Shift+R` turn it 90°,
+  `E` / `Shift+E` turn it by the **Rotate by** angle, `M` mirrors it, click
+  (or Enter) places it, Esc cancels. Like drawing, it
+  cuts what's under it. Heights, materials, wall settings and texture
+  alignment come along.
+- **Rotate 90°** / **Mirror X** / **Mirror Z** (dock or **Edit** menu) — turn
+  or flip the selected sectors about the grid point nearest their center.
+  **Rotate by Angle** turns them by any angle (the dock's angle field;
+  positive is clockwise seen from above). Neighbours stay put, so a move that
+  would overlap one is refused.
+- **Prefabs** — **Save as Prefab…** (dock or **Edit** menu) saves the
+  selected sectors, with their heights, materials, wall settings and texture
+  alignment, as a `.tres` resource. **Paste Prefab…** loads one into this or
+  any other map and places it like a paste (R / E / M work). A prefab is a
+  plain `DMMapData` resource, so any saved map data works too.
+- **Stairs** (dock, folded; or **Edit** menu) — **Make Stairs**: Shift+click
+  the steps in order, and each floor becomes one **Step height** above the one
+  before (starting from the first one's floor; negative goes down). **Split
+  into Steps**: cut one selected sector into **Steps** equal strips across the
+  **Climbing** direction (±X, ±Z) and make them stairs. **Ceilings move too**
+  moves each ceiling with its floor (a sloping corridor); otherwise ceilings
+  stay, rising only where a floor would pass them.
+- **Texture alignment** (dock, folded) — textures are world-aligned (one
+  repeat per meter) so neighbouring surfaces line up. For the selection's
+  floors, ceilings or walls, set an **Offset**, a **Size** (meters per repeat,
+  per axis; negative mirrors) and a **Rotation**. With a single wall selected,
+  **Walls** aligns just that wall (**Reset Wall** clears it too). A sector
+  drawn inside another copies its alignment, so they still line up.
+  Normal-mapped materials stay correct (tangents follow the alignment).
+  - **Fit** — one texture repeat exactly covering each selected floor or
+    ceiling (its bounding box), or each wall (its length and height; with a
+    single wall selected, just that one).
+  - **Alt+arrow keys** over a surface in the viewport move its texture one
+    grid step (Shift: an eighth of a step). Over a selected sector's floor or
+    ceiling, every selected one moves; over a wall, just that wall.
+  - **Ctrl+Shift+C** over a surface copies its alignment, **Ctrl+Shift+V**
+    over another pastes it (also **Copy / Paste Alignment** in the dock, for
+    the chosen surface of the selection).
 - Page Up / Page Down, or Alt+mouse wheel, over a floor or ceiling — raise or
   lower it one grid step (all selected sectors if the hovered one is selected).
 - `[` / `]` — smaller / larger grid. Delete — delete selected sectors.
@@ -102,9 +158,8 @@ Every edit can be undone with Ctrl+Z.
 
 ## Planned
 
-Splitting sectors, per-wall textures, texture alignment, a stair
-builder, doors and lifts, lighting, a things palette, slopes, and rooms over
-rooms.
+Per-wall materials, doors and lifts, lighting, a things palette, slopes, and
+rooms over rooms.
 
 ## This repository
 
@@ -122,10 +177,35 @@ The repo is also a Godot project for developing the plugin:
 
   ```
   godot --headless --path . --script res://test/map_test.gd
+  godot --headless --path . --script res://test/features_test.gd
+  godot --headless --path . --script res://test/editor_test.gd
   godot --headless --path . --script res://test/tool_test.gd
   godot --headless --path . --script res://test/toolbar_test.gd
   godot --headless --path . --script res://test/player_test.gd
+  godot --headless --path . --script res://test/fuzz_test.gd
   ```
+
+  `fuzz_test.gd` draws and drags random shapes and checks that maps stay
+  valid. For a longer search: `... fuzz_test.gd -- --rounds=500 --start=5000`;
+  to rerun one failing seed with details: `-- --seed=N --verbose`.
+- `test/strict_check.sh` checks every addon script with Godot's strict typing
+  warnings as errors (untyped declarations, unsafe property and method
+  access, unsafe casts and call arguments):
+  `GODOT=/path/to/godot bash test/strict_check.sh` (it changes
+  `project.godot` for the run and puts it back).
+- GitHub Actions runs the strict check and all the tests on every push
+  (`.github/workflows/tests.yml`).
+
+### Code layout
+
+- `core/` — the map data and geometry, no editor needed: `DMMapData` (sectors
+  and every edit on them, returning a `DMResult`), `DMSector`, `DMGeo`, and
+  `DMBuilder`, which builds a `DMBuildInfo` (faces, triangles, outlines) and
+  the mesh.
+- `nodes/map.gd` — `DMMap`, the node in your scene (mesh, collision, picking).
+- `editor/` — `DMEditor` (every edit on the selected map as one undo step,
+  usable headless), `DMTool` (viewport input and overlay), the dock, toolbar
+  and grid. `plugin.gd` connects `DMEditor` to Godot's editor.
 
 ## License
 

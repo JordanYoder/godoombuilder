@@ -64,6 +64,24 @@ static func normalized(p: PackedVector2Array, ccw := true) -> PackedVector2Array
 	return c
 
 
+## True when `pt` is inside the polygon (even-odd rule). Used instead of
+## Geometry2D.is_point_in_polygon, which can report points far outside a
+## polygon as inside when it has nearly parallel edges.
+static func point_in_polygon(pt: Vector2, p: PackedVector2Array) -> bool:
+	var inside := false
+	var n := p.size()
+	var j := n - 1
+	for i in n:
+		var a := p[i]
+		var b := p[j]
+		if (a.y > pt.y) != (b.y > pt.y):
+			var x := a.x + (pt.y - a.y) * (b.x - a.x) / (b.y - a.y)
+			if pt.x < x:
+				inside = not inside
+		j = i
+	return inside
+
+
 ## A point strictly inside the polygon (centroid of its largest triangle).
 static func interior_point(p: PackedVector2Array) -> Vector2:
 	var tri := Geometry2D.triangulate_polygon(p)
@@ -97,13 +115,31 @@ static func is_simple(p: PackedVector2Array) -> bool:
 				continue
 			var c := p[j]
 			var d := p[(j + 1) % n]
-			if Geometry2D.segment_intersects_segment(a, b, c, d) != null:
+			if segments_touch(a, b, c, d):
 				return false
 	return true
 
 
+## True when segments a-b and c-d meet. Geometry2D.segment_intersects_segment
+## alone reports false crossings for nearly parallel segments (a point on
+## neither), so its answer is checked against both segments.
+static func segments_touch(a: Vector2, b: Vector2, c: Vector2, d: Vector2) -> bool:
+	var x: Variant = Geometry2D.segment_intersects_segment(a, b, c, d)
+	if x == null:
+		return false
+	var p: Vector2 = x
+	const EPS := 1e-6
+	return Geometry2D.get_closest_point_to_segment(p, a, b).distance_to(p) <= EPS 		and Geometry2D.get_closest_point_to_segment(p, c, d).distance_to(p) <= EPS
+
+
+## A clipper result split into outer boundaries and holes.
+class Parts:
+	var outers: Array[PackedVector2Array] = []
+	var holes: Array[PackedVector2Array] = []
+
+
 ## Splits a clipper result into outer boundaries and holes.
-static func classify(results: Array) -> Dictionary:
+static func classify(results: Array[PackedVector2Array]) -> Parts:
 	var outers: Array[PackedVector2Array] = []
 	var holes: Array[PackedVector2Array] = []
 	var big := 0.0
@@ -121,16 +157,111 @@ static func classify(results: Array) -> Dictionary:
 			outers.append(r)
 		else:
 			holes.append(r)
-	return {"outers": outers, "holes": holes}
+	var parts := Parts.new()
+	parts.outers = outers
+	parts.holes = holes
+	return parts
 
 
-static func _normalize_all(polys: Array) -> Array[PackedVector2Array]:
+static func _normalize_all(polys: Array[PackedVector2Array], depth := 0) -> Array[PackedVector2Array]:
 	var out: Array[PackedVector2Array] = []
 	for p in polys:
-		var c := normalized(p)
-		if not c.is_empty() and absf(signed_area(c)) >= MIN_AREA:
+		var c := clean(p)
+		if c.is_empty():
+			continue
+		var lobes := split_pinches(c)
+		if lobes.size() == 1:
+			c = normalized(c)
+			if c.is_empty() or absf(signed_area(c)) < MIN_AREA:
+				continue
 			out.append(c)
+			continue
+		# Pinched (the loop touches itself at a point): lobes running the same
+		# way as the loop are pieces of it; lobes running the other way are
+		# holes touching its boundary at that point, cut out of the pieces.
+		var sign := signf(signed_area(c))
+		var pieces: Array[PackedVector2Array] = []
+		var holes: Array[PackedVector2Array] = []
+		for lobe in lobes:
+			var a := signed_area(lobe)
+			if absf(a) < MIN_AREA:
+				continue
+			var n := normalized(lobe)
+			if n.is_empty():
+				continue
+			if signf(a) == sign:
+				pieces.append(n)
+			else:
+				holes.append(n)
+		for h in holes:
+			if depth >= 6:
+				push_warning("GoDoomBuilder: couldn't cut a hole out of a pinched polygon")
+				break
+			# Cut each piece in two through the hole first (as subtract() does
+			# for holes), so the hole opens onto the cut instead of touching
+			# the boundary at a single point again.
+			var x := interior_point(h).x
+			var next: Array[PackedVector2Array] = []
+			for piece in pieces:
+				if overlap_area(piece, h) < MIN_AREA:
+					next.append(piece)
+					continue
+				for half in halves(piece, x):
+					next.append_array(_normalize_all(classify(Geometry2D.clip_polygons(half, h)).outers, depth + 1))
+			pieces = next
+		out.append_array(pieces)
 	return out
+
+
+## Splits a loop that touches itself (visits the same point twice, or has a
+## corner lying on one of its other edges) into loops that don't, e.g. a
+## figure eight into its two halves.
+static func split_pinches(p: PackedVector2Array) -> Array[PackedVector2Array]:
+	p = _insert_touching_corners(p)
+	return _split_repeats(p)
+
+
+## A corner lying on a non-adjacent edge of the same loop is added to that
+## edge too, so the touch becomes a repeated point that _split_repeats finds.
+static func _insert_touching_corners(p: PackedVector2Array) -> PackedVector2Array:
+	var guard := p.size() * 2
+	var inserted := true
+	while inserted and guard > 0:
+		inserted = false
+		guard -= 1
+		var n := p.size()
+		for i in n:
+			var v := p[i]
+			for j in n:
+				var j2 := (j + 1) % n
+				if j == i or j2 == i:
+					continue
+				var a := p[j]
+				var b := p[j2]
+				if v.distance_to(a) <= SNAP * 0.5 or v.distance_to(b) <= SNAP * 0.5:
+					continue
+				if Geometry2D.get_closest_point_to_segment(v, a, b).distance_to(v) <= SNAP:
+					p.insert(j + 1, v)
+					inserted = true
+					break
+			if inserted:
+				break
+	return p
+
+
+static func _split_repeats(p: PackedVector2Array) -> Array[PackedVector2Array]:
+	var seen := {}
+	for i in p.size():
+		var k := Vector2i(roundi(p[i].x / SNAP), roundi(p[i].y / SNAP))
+		if seen.has(k):
+			var j: int = seen[k]
+			var out: Array[PackedVector2Array] = []
+			out.append_array(_split_repeats(p.slice(j, i)))
+			out.append_array(_split_repeats(p.slice(0, j) + p.slice(i)))
+			return out
+		seen[k] = i
+	var one: Array[PackedVector2Array] = [p]
+	return one
 
 
 ## `p` minus `n`, as hole-free counter-clockwise polygons.
@@ -138,8 +269,8 @@ static func _normalize_all(polys: Array) -> Array[PackedVector2Array]:
 ## in two by a vertical line through `n`, so each half gets a notch instead.
 static func subtract(p: PackedVector2Array, n: PackedVector2Array, depth := 0) -> Array[PackedVector2Array]:
 	var parts := classify(Geometry2D.clip_polygons(p, n))
-	if (parts.holes as Array).is_empty() or depth >= 6:
-		return _normalize_all(parts.outers)
+	if parts.holes.is_empty() or depth >= 6:
+		return _normalize_all(parts.outers, depth)
 	var x := interior_point(n).x
 	var out: Array[PackedVector2Array] = []
 	for half in halves(p, x):

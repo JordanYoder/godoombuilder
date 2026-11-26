@@ -6,7 +6,7 @@ extends RefCounted
 ## floors and ceilings.
 
 
-enum Mode { SELECT, DRAW, RECT }
+enum Mode { SELECT, DRAW, RECT, PASTE }
 
 ## Characters accepted when typing a size while drawing.
 const TYPED_CHARS := "0123456789."
@@ -25,12 +25,73 @@ const COLOR_DRAW := Color(0.35, 0.85, 1.0)
 const COLOR_CLOSE := Color(0.4, 1.0, 0.45)
 const COLOR_BAD := Color(1.0, 0.3, 0.25)
 
-## The GoDoomBuilder EditorPlugin (untyped: it calls the plugin's own methods).
-var plugin
+## Returned by _screen() and _plane_point() when there is no such point.
+const NOWHERE := Vector2(INF, INF)
+
+
+## A single wall: sector `sector`'s polygon edge a -> b.
+class Wall:
+	var sector: int
+	var a: Vector2
+	var b: Vector2
+
+	func _init(si: int, from: Vector2, to: Vector2) -> void:
+		sector = si
+		a = from
+		b = to
+
+
+## A corner or wall of a selected sector you can drag.
+class Handle:
+	enum Kind { VERTEX, EDGE, OUTER_VERTEX, OUTER_EDGE }
+	var kind := Kind.VERTEX
+	## Where it is (a == b for corners), at height h.
+	var a: Vector2
+	var b: Vector2
+	var h := 0.0
+	## Thick walls only: the sector, the room corner an outer corner belongs
+	## to, and for an outer face the room's wall, its outward normal and
+	## thickness.
+	var sector := -1
+	var inner: Vector2
+	var inner_a: Vector2
+	var inner_b: Vector2
+	var out: Vector2
+	var thickness := 0.0
+
+	static func make(k: Kind, from: Vector2, to: Vector2, height: float) -> Handle:
+		var hd := Handle.new()
+		hd.kind = k
+		hd.a = from
+		hd.b = to
+		hd.h = height
+		return hd
+
+	func is_edge() -> bool:
+		return kind == Kind.EDGE or kind == Kind.OUTER_EDGE
+
+
+## A drag in progress: the handle, the map before it, and where it is now.
+class Drag:
+	var handle: Handle
+	var before: DMMapData
+	## Where the mouse went down (on the handle's height plane).
+	var start: Vector2
+	var valid := true
+	var moved := false
+	var to_a: Vector2
+	var to_b: Vector2
+	## Outer faces: the thickness the drag sets.
+	var thickness_now := 0.0
+
+
+## What the tool asks of the editor: edits, settings and messages.
+var editor: DMEditor
 var map: DMMap
 var mode := Mode.SELECT
 var selected: Array[int] = []
-var hover := {}
+## The face under the mouse, or null.
+var hover: DMMap.Hit
 var points := PackedVector2Array()
 var draw_height := 0.0
 var cursor := Vector2.ZERO
@@ -48,17 +109,31 @@ var rect_field := 0
 ## Fixed rectangle size in meters per axis; negative follows the mouse.
 var rect_size := Vector2(-1.0, -1.0)
 
-## The single wall picked by clicking it: {sector, a, b} (a, b: the sector
-## polygon edge), or {}. Its sector is the only selected sector.
-var selected_wall := {}
+## The single wall picked by clicking it, or null. Its sector is the only
+## selected sector.
+var selected_wall: Wall
 
-## Corner or wall of a selected sector under the mouse:
-## {kind: "vertex"|"edge", a, b (Vector2), h (float)} or {}.
-var handle := {}
-## Active corner/wall drag (see _start_drag), or {}.
-var drag := {}
+## Corner or wall of a selected sector under the mouse, or null.
+var handle: Handle
+## Active corner/wall drag, or null.
+var drag: Drag
 
 var _consume_release := false
+
+## Box select: where the mouse went down (screen), whether it has moved far
+## enough to be a box, whether Shift was held (adds to the selection), and
+## the selection before it started.
+const BOX_START_PX := 6.0
+var box_pending := false
+var box_active := false
+var box_start := Vector2.ZERO
+var _box_additive := false
+var _box_before: Array[int] = []
+var _box_click: Array[int] = []
+
+## Pasting: rotation / mirror applied to the clipboard before it's moved to
+## the cursor (R rotates, M mirrors while placing).
+var paste_basis := Transform2D.IDENTITY
 
 
 func set_map(m: DMMap) -> void:
@@ -67,8 +142,9 @@ func set_map(m: DMMap) -> void:
 	cancel_drag()
 	cancel_draw()
 	selected.clear()
-	hover = {}
-	handle = {}
+	selected_wall = null
+	hover = null
+	handle = null
 	map = m
 
 
@@ -79,10 +155,10 @@ func validate_selection() -> void:
 		if i < count and not keep.has(i):
 			keep.append(i)
 	selected = keep
-	if not selected_wall.is_empty() and (selected != [int(selected_wall.sector)]):
-		selected_wall = {}
-	if not hover.is_empty() and int(hover.sector) >= count:
-		hover = {}
+	if selected_wall != null and (selected.size() != 1 or selected[0] != selected_wall.sector):
+		selected_wall = null
+	if hover != null and hover.sector >= count:
+		hover = null
 
 
 func begin_draw(rectangle := false) -> void:
@@ -102,7 +178,35 @@ func cancel_draw() -> void:
 
 
 func is_drawing() -> bool:
-	return mode != Mode.SELECT
+	return mode == Mode.DRAW or mode == Mode.RECT
+
+
+## Starts placing the editor's clipboard: it follows the mouse until clicked.
+func begin_paste() -> void:
+	if map == null:
+		return
+	cancel_drag()
+	_reset_draw_state()
+	paste_basis = Transform2D.IDENTITY
+	mode = Mode.PASTE
+	if not selected.is_empty():
+		draw_height = map.data.sectors[selected[0]].floor_height
+	_update_cursor()
+	_changed()
+
+
+## Where the clipboard would be pasted now: its rotation / mirror, then its
+## bounding box corner moved to the cursor.
+func paste_transform() -> Transform2D:
+	# Rotating or mirroring moves the box; keep its corner at the cursor.
+	var lo := Vector2(INF, INF)
+	for s in editor.clipboard:
+		for p in s.polygons:
+			for v in p:
+				lo = lo.min(paste_basis * v)
+	if lo.x == INF:
+		lo = Vector2.ZERO
+	return Transform2D(0.0, cursor - lo) * paste_basis
 
 
 func _reset_draw_state() -> void:
@@ -141,21 +245,44 @@ func handle_input(cam: Camera3D, event: InputEvent) -> int:
 		return EditorPlugin.AFTER_GUI_INPUT_PASS
 
 	if event is InputEventMouseMotion:
-		mouse_pos = (event as InputEventMouseMotion).position
-		if not drag.is_empty():
+		var motion: InputEventMouseMotion = event
+		mouse_pos = motion.position
+		if box_pending and (motion.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+			if not box_active and mouse_pos.distance_to(box_start) >= BOX_START_PX:
+				box_active = true
+			if box_active:
+				_update_box()
+				editor.update_overlays()
+				return EditorPlugin.AFTER_GUI_INPUT_STOP
+		if drag != null:
 			_update_drag()
-			plugin.update_overlays()
+			editor.update_overlays()
 			return EditorPlugin.AFTER_GUI_INPUT_STOP
+		if mode == Mode.PASTE:
+			_update_cursor()
+			editor.update_overlays()
+			return EditorPlugin.AFTER_GUI_INPUT_PASS
 		_update_hover()
-		plugin.update_overlays()
+		editor.update_overlays()
 		return EditorPlugin.AFTER_GUI_INPUT_PASS
 
 	if event is InputEventMouseButton:
-		var mb := event as InputEventMouseButton
+		var mb: InputEventMouseButton = event
 		mouse_pos = mb.position
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
+				if mode == Mode.PASTE:
+					_update_cursor()
+					if cursor_valid and editor.paste_at(paste_transform()):
+						mode = Mode.SELECT
+						_changed()
+					_consume_release = true
+					return EditorPlugin.AFTER_GUI_INPUT_STOP
 				_update_hover()
+				if mode == Mode.SELECT and mb.double_click and handle != null and handle.kind == Handle.Kind.EDGE:
+					_split_at_handle()
+					_consume_release = true
+					return EditorPlugin.AFTER_GUI_INPUT_STOP
 				if mode == Mode.DRAW:
 					_draw_click()
 					_consume_release = true
@@ -164,13 +291,33 @@ func handle_input(cam: Camera3D, event: InputEvent) -> int:
 					_rect_click()
 					_consume_release = true
 					return EditorPlugin.AFTER_GUI_INPUT_STOP
-				if not handle.is_empty() and not mb.shift_pressed:
+				if handle != null and not mb.shift_pressed:
 					_start_drag()
 					return EditorPlugin.AFTER_GUI_INPUT_STOP
-				return _select_click(mb.shift_pressed)
-			if not drag.is_empty():
+				var before: Array[int] = []
+				before.assign(selected)
+				var result := _select_click(mb.shift_pressed)
+				if result == EditorPlugin.AFTER_GUI_INPUT_STOP:
+					# Clicked a surface: dragging on from here draws a selection box.
+					box_pending = true
+					box_active = false
+					box_start = mouse_pos
+					_box_additive = mb.shift_pressed
+					_box_before = before
+					_box_click.assign(selected)
+				return result
+			if drag != null:
 				_end_drag()
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
+			if box_pending:
+				var was_box := box_active
+				box_pending = false
+				box_active = false
+				if was_box:
+					_update_box()
+					_consume_release = false
+					_changed()
+					return EditorPlugin.AFTER_GUI_INPUT_STOP
 			if _consume_release:
 				_consume_release = false
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
@@ -182,13 +329,50 @@ func handle_input(cam: Camera3D, event: InputEvent) -> int:
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
 		return EditorPlugin.AFTER_GUI_INPUT_PASS
 
-	if event is InputEventKey and (event as InputEventKey).pressed:
-		return _key(event as InputEventKey)
+	if event is InputEventKey:
+		var k: InputEventKey = event
+		if k.pressed:
+			return _key(k)
 	return EditorPlugin.AFTER_GUI_INPUT_PASS
 
 
 func _key(k: InputEventKey) -> int:
 	var plain := not (k.ctrl_pressed or k.alt_pressed or k.meta_pressed)
+	var command := (k.ctrl_pressed or k.meta_pressed) and not k.alt_pressed and not k.shift_pressed
+	var shift_command := (k.ctrl_pressed or k.meta_pressed) and not k.alt_pressed and k.shift_pressed
+	# Texture tools over the surface under the mouse.
+	if mode == Mode.SELECT and shift_command and not k.echo and (k.keycode == KEY_C or k.keycode == KEY_V):
+		_update_hover()
+		if hover == null:
+			return EditorPlugin.AFTER_GUI_INPUT_PASS
+		var wall := hovered_wall()
+		if k.keycode == KEY_C:
+			editor.copy_uv(hover.sector, hover.part, wall)
+		else:
+			editor.paste_uv(_hover_targets(), hover.part, wall)
+		return EditorPlugin.AFTER_GUI_INPUT_STOP
+	if mode == Mode.SELECT and k.alt_pressed and not (k.ctrl_pressed or k.meta_pressed) and ARROWS.has(k.keycode):
+		_update_hover()
+		if hover == null:
+			return EditorPlugin.AFTER_GUI_INPUT_PASS
+		var step := editor.grid_step * (0.125 if k.shift_pressed else 1.0)
+		var dir: Vector2 = ARROWS[k.keycode]
+		editor.nudge_uv(_hover_targets(), hover.part, hovered_wall(), dir * step)
+		return EditorPlugin.AFTER_GUI_INPUT_STOP
+	if box_active and k.keycode == KEY_ESCAPE:
+		box_pending = false
+		box_active = false
+		selected.assign(_box_before)
+		_changed()
+		return EditorPlugin.AFTER_GUI_INPUT_STOP
+	if command and not k.echo and k.keycode == KEY_C and mode == Mode.SELECT and not selected.is_empty():
+		editor.copy_selected()
+		return EditorPlugin.AFTER_GUI_INPUT_STOP
+	if command and not k.echo and k.keycode == KEY_V and (mode == Mode.SELECT or mode == Mode.PASTE):
+		editor.begin_paste()
+		return EditorPlugin.AFTER_GUI_INPUT_STOP
+	if mode == Mode.PASTE:
+		return _paste_key(k, plain)
 	# Typing a size while drawing.
 	if is_drawing() and plain and k.unicode > 0 and TYPED_CHARS.contains(char(k.unicode)):
 		var ch := char(k.unicode)
@@ -212,7 +396,7 @@ func _key(k: InputEventKey) -> int:
 				_changed()
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
 		KEY_ESCAPE:
-			if not drag.is_empty():
+			if drag != null:
 				cancel_drag()
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
 			if is_drawing():
@@ -256,45 +440,96 @@ func _key(k: InputEventKey) -> int:
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
 		KEY_J:
 			if mode == Mode.SELECT and plain and not k.shift_pressed and not k.echo and selected.size() >= 2:
-				plugin.join_selected()
+				editor.join_selected()
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
 		KEY_DELETE:
-			if mode == Mode.SELECT and not selected_wall.is_empty() and plain:
-				plugin.set_wall_hidden(true)
+			if mode == Mode.SELECT and plain and handle != null and handle.kind == Handle.Kind.VERTEX:
+				editor.remove_corner(handle.a)
+				_update_hover()
+				return EditorPlugin.AFTER_GUI_INPUT_STOP
+			if mode == Mode.SELECT and selected_wall != null and plain:
+				editor.set_wall_hidden(true)
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
 			if mode == Mode.SELECT and not selected.is_empty() and plain:
-				plugin.delete_selected()
+				editor.delete_selected()
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
 		KEY_PAGEUP, KEY_PAGEDOWN:
 			if plain and _nudge_hovered(1 if k.keycode == KEY_PAGEUP else -1):
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
 		KEY_BRACKETLEFT, KEY_BRACKETRIGHT:
 			if plain and not k.echo:
-				plugin.shift_grid(-1 if k.keycode == KEY_BRACKETLEFT else 1)
+				editor.shift_grid(-1 if k.keycode == KEY_BRACKETLEFT else 1)
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
 	return EditorPlugin.AFTER_GUI_INPUT_PASS
 
 
+## Alt+arrow keys: which way the texture moves (x along its width, y along
+## its height; up is -y on walls, so the texture rises).
+const ARROWS := {KEY_LEFT: Vector2(-1, 0), KEY_RIGHT: Vector2(1, 0), KEY_UP: Vector2(0, -1), KEY_DOWN: Vector2(0, 1)}
+
+
+## Keys while placing a paste: R / Shift+R rotate 90°, E / Shift+E by the
+## Rotate angle, M mirrors, Esc cancels.
+func _paste_key(k: InputEventKey, plain: bool) -> int:
+	if not plain or k.echo:
+		return EditorPlugin.AFTER_GUI_INPUT_PASS
+	match k.keycode:
+		KEY_R:
+			paste_basis = Transform2D(PI * 0.5 * (-1.0 if k.shift_pressed else 1.0), Vector2.ZERO) * paste_basis
+		KEY_E:
+			paste_basis = Transform2D(deg_to_rad(editor.rotate_angle) * (-1.0 if k.shift_pressed else 1.0), Vector2.ZERO) * paste_basis
+		KEY_M:
+			paste_basis = Transform2D(Vector2(-1, 0), Vector2(0, 1), Vector2.ZERO) * paste_basis
+		KEY_ESCAPE:
+			mode = Mode.SELECT
+		KEY_ENTER, KEY_KP_ENTER:
+			if cursor_valid and editor.paste_at(paste_transform()):
+				mode = Mode.SELECT
+		_:
+			return EditorPlugin.AFTER_GUI_INPUT_PASS
+	_changed()
+	return EditorPlugin.AFTER_GUI_INPUT_STOP
+
+
+## Double-click on a selected sector's wall: a new corner there (on the grid
+## when a grid point lies on the wall, else right under the mouse).
+func _split_at_handle() -> void:
+	var p := _plane_point(handle.h)
+	if p == NOWHERE:
+		return
+	var a := handle.a
+	var b := handle.b
+	var at := Geometry2D.get_closest_point_to_segment(p, a, b)
+	if not Input.is_key_pressed(KEY_SHIFT):
+		var step := editor.grid_step
+		var g := p.snapped(Vector2(step, step))
+		if Geometry2D.get_closest_point_to_segment(g, a, b).distance_to(g) < DMGeo.LINE_EPS:
+			at = g
+	if at.distance_to(a) < DMGeo.LINE_EPS or at.distance_to(b) < DMGeo.LINE_EPS:
+		return
+	editor.insert_corner(at)
+	_update_hover()
+
+
 func _select_click(additive: bool) -> int:
-	if hover.is_empty():
+	if hover == null:
 		if not additive and not selected.is_empty():
 			selected.clear()
 			_changed()
 		# Let Godot handle clicks on empty space (select other nodes, etc.).
 		return EditorPlugin.AFTER_GUI_INPUT_PASS
-	var s := int(hover.sector)
-	selected_wall = {}
+	var s := hover.sector
+	selected_wall = null
 	if additive:
 		if selected.has(s):
 			selected.erase(s)
 		else:
 			selected.append(s)
 	else:
-		selected = [s]
-		if int(hover.part) == DMBuilder.Part.WALL:
-			var fe: PackedVector2Array = map.build_info.face_edge
-			var f := int(hover.face)
-			selected_wall = {"sector": s, "a": fe[f * 2], "b": fe[f * 2 + 1]}
+		selected.assign([s])
+		if hover.part == DMBuilder.Part.WALL:
+			var edge := map.build_info.edge_of(hover.face)
+			selected_wall = Wall.new(s, edge[0], edge[1])
 	_consume_release = true
 	_changed()
 	return EditorPlugin.AFTER_GUI_INPUT_STOP
@@ -303,17 +538,79 @@ func _select_click(additive: bool) -> int:
 ## Raises (dir 1) or lowers (dir -1) the hovered floor or ceiling by one grid
 ## step. When the hovered sector is selected, all selected sectors move.
 func _nudge_hovered(dir: int) -> bool:
-	if hover.is_empty() or int(hover.part) == DMBuilder.Part.WALL:
+	if hover == null or hover.part == DMBuilder.Part.WALL:
 		return false
-	var s := int(hover.sector)
+	var s := hover.sector
 	var targets: Array[int] = []
 	if selected.has(s):
 		targets.assign(selected)
 	else:
 		targets.append(s)
-	plugin.nudge_heights(targets, int(hover.part), dir * plugin.grid_step)
+	editor.nudge_heights(targets, hover.part, dir * editor.grid_step)
 	_update_hover()
 	return true
+
+
+## The wall under the mouse (its sector's polygon edge), or null.
+func hovered_wall() -> Wall:
+	if hover == null or hover.part != DMBuilder.Part.WALL:
+		return null
+	var edge := map.build_info.edge_of(hover.face)
+	return Wall.new(hover.sector, edge[0], edge[1])
+
+
+## The sectors an action on the hovered surface applies to: all selected
+## ones when the hovered one is selected (floors and ceilings), else it.
+func _hover_targets() -> Array[int]:
+	var out: Array[int] = []
+	if hover == null:
+		return out
+	if hover.part != DMBuilder.Part.WALL and selected.has(hover.sector):
+		out.assign(selected)
+	else:
+		out.append(hover.sector)
+	return out
+
+
+## Box select: the sectors whose middle (on the floor) is inside the box on
+## screen, added to the earlier selection with Shift. A box around nothing
+## leaves what the click selected.
+func _update_box() -> void:
+	var box := Rect2(box_start, Vector2.ZERO).expand(mouse_pos)
+	var found: Array[int] = []
+	for si in map.data.sectors.size():
+		var s := map.data.sectors[si]
+		if s.polygons.is_empty():
+			continue
+		var sp := _screen(_v3(sector_middle(s), s.floor_height))
+		if sp != NOWHERE and box.has_point(sp):
+			found.append(si)
+	if found.is_empty():
+		selected.assign(_box_click)
+		return
+	var out: Array[int] = []
+	if _box_additive:
+		out.assign(_box_before)
+	for si in found:
+		if not out.has(si):
+			out.append(si)
+	selected = out
+	selected_wall = null
+
+
+## A point in the middle of a sector's floor: the center of its bounds when
+## that's on the floor, else a point inside its largest piece.
+static func sector_middle(s: DMSector) -> Vector2:
+	var box := Rect2(s.polygons[0][0], Vector2.ZERO)
+	var largest := s.polygons[0]
+	for poly in s.polygons:
+		for q in poly:
+			box = box.expand(q)
+		if DMGeo.signed_area(poly) > DMGeo.signed_area(largest):
+			largest = poly
+	if s.contains_point(box.get_center()):
+		return box.get_center()
+	return DMGeo.interior_point(largest)
 
 
 func _draw_click() -> void:
@@ -330,11 +627,11 @@ func _draw_click() -> void:
 
 
 func _finish() -> void:
-	var result: Dictionary = plugin.commit_loop(points)
+	var result := editor.commit_loop(points)
 	if result.ok:
 		_reset_draw_state()
 		mode = Mode.SELECT
-		selected = [int(result.index)]
+		selected.assign([result.index])
 	elif mode == Mode.RECT:
 		points.clear()
 	_changed()
@@ -344,14 +641,15 @@ func _finish() -> void:
 func typed_meters() -> float:
 	if typed.is_empty() or typed == ".":
 		return -1.0
-	return DMUnits.from_display(typed.to_float(), plugin.units)
+	return DMUnits.from_display(typed.to_float(), editor.units)
 
 
-## Freeform drawing: where a typed length would put the next point, or null.
-func typed_point() -> Variant:
+## Freeform drawing: where a typed length would put the next point, or
+## NOWHERE.
+func typed_point() -> Vector2:
 	var length := typed_meters()
 	if mode != Mode.DRAW or points.is_empty() or length <= 0.0:
-		return null
+		return NOWHERE
 	var last := points[points.size() - 1]
 	var dir := cursor - last
 	var angle := 0.0 if dir.length() < 1e-6 else dir.angle()
@@ -362,12 +660,12 @@ func typed_point() -> Variant:
 
 
 func _place_typed_point() -> void:
-	var p = typed_point()
+	var p := typed_point()
 	typed = ""
-	if p != null:
+	if p != NOWHERE:
 		points.append(p)
 	elif points.is_empty():
-		plugin.notify("Click the first point, then type the length of each side.")
+		editor.notify("Click the first point, then type the length of each side.")
 	_changed()
 
 
@@ -412,7 +710,7 @@ func _finish_rect() -> void:
 	var a := rect_anchor
 	var c := rect_corner()
 	if absf(c.x - a.x) < DMGeo.SNAP or absf(c.y - a.y) < DMGeo.SNAP:
-		plugin.notify("Give the rectangle a width and a depth first (move the mouse or type them).")
+		editor.notify("Give the rectangle a width and a depth first (move the mouse or type them).")
 		return
 	points = PackedVector2Array([a, Vector2(c.x, a.y), c, Vector2(a.x, c.y)])
 	_finish()
@@ -423,20 +721,20 @@ func _near_first() -> bool:
 		return false
 	if cursor.distance_to(points[0]) < DMGeo.SNAP:
 		return true
-	var sp = _screen(Vector3(points[0].x, draw_height, points[0].y))
-	return sp != null and (sp as Vector2).distance_to(mouse_pos) <= CLOSE_PX
+	var sp := _screen(Vector3(points[0].x, draw_height, points[0].y))
+	return sp != NOWHERE and sp.distance_to(mouse_pos) <= CLOSE_PX
 
 
 func _update_hover() -> void:
 	if camera == null or map == null:
-		hover = {}
+		hover = null
 		return
 	hover = map.pick(camera.project_ray_origin(mouse_pos), camera.project_ray_normal(mouse_pos))
-	handle = _find_handle() if mode == Mode.SELECT else {}
+	handle = _find_handle() if mode == Mode.SELECT else null
 	if is_drawing():
 		var started := rect_started if mode == Mode.RECT else not points.is_empty()
-		if not started and not hover.is_empty() and int(hover.part) == DMBuilder.Part.FLOOR:
-			draw_height = map.data.sectors[int(hover.sector)].floor_height
+		if not started and hover != null and hover.part == DMBuilder.Part.FLOOR:
+			draw_height = map.data.sectors[hover.sector].floor_height
 		_update_cursor()
 
 
@@ -444,14 +742,10 @@ func _update_cursor() -> void:
 	cursor_valid = false
 	if camera == null or map == null:
 		return
-	var xf := map.map_transform()
-	var plane := xf * Plane(Vector3.UP, draw_height)
-	var hit = plane.intersects_ray(camera.project_ray_origin(mouse_pos), camera.project_ray_normal(mouse_pos))
-	if hit == null:
+	var p := _plane_point(draw_height)
+	if p == NOWHERE:
 		return
-	var local: Vector3 = xf.affine_inverse() * (hit as Vector3)
-	var extra := points.duplicate()
-	cursor = _snap_point(Vector2(local.x, local.z), draw_height, extra)
+	cursor = _snap_point(p, draw_height, points.duplicate())
 	cursor_valid = true
 
 
@@ -466,188 +760,214 @@ func _snap_point(p: Vector2, h: float, extra := PackedVector2Array(), exclude :=
 	for v in candidates:
 		if exclude.has(DMMapData.key_of(v)):
 			continue
-		var sp = _screen(Vector3(v.x, h, v.y))
-		if sp == null:
+		var sp := _screen(Vector3(v.x, h, v.y))
+		if sp == NOWHERE:
 			continue
-		var d := (sp as Vector2).distance_to(mouse_pos)
+		var d := sp.distance_to(mouse_pos)
 		if d < best:
 			best = d
 			out = v
 			snapped_to_vertex = true
 	if not snapped_to_vertex and not Input.is_key_pressed(KEY_SHIFT):
-		var step: float = plugin.grid_step
+		var step := editor.grid_step
 		out = p.snapped(Vector2(step, step))
 	return out
 
 
-## The mouse ray hitting the horizontal plane at map height `h`, or null.
-func _plane_point(h: float) -> Variant:
+## Where the ray through screen point `at` (default: the mouse) hits the
+## horizontal plane at map height `h` (map coordinates), or NOWHERE.
+func _plane_point(h: float, at := NOWHERE) -> Vector2:
+	var screen_pos := mouse_pos if at == NOWHERE else at
 	var xf := map.map_transform()
-	var hit = (xf * Plane(Vector3.UP, h)).intersects_ray(
-		camera.project_ray_origin(mouse_pos), camera.project_ray_normal(mouse_pos))
+	var hit: Variant = (xf * Plane(Vector3.UP, h)).intersects_ray(
+		camera.project_ray_origin(screen_pos), camera.project_ray_normal(screen_pos))
 	if hit == null:
-		return null
-	var local: Vector3 = xf.affine_inverse() * (hit as Vector3)
+		return NOWHERE
+	var world: Vector3 = hit
+	var local := xf.affine_inverse() * world
 	return Vector2(local.x, local.z)
 
 
 # --- Dragging corners and walls ------------------------------------------------
 
 ## The corner or wall of a selected sector under the mouse, if any.
-func _find_handle() -> Dictionary:
-	if selected.is_empty() or map.build_info.is_empty():
-		return {}
+func _find_handle() -> Handle:
+	var info := map.build_info
+	if selected.is_empty() or info.is_empty():
+		return null
 	var best := HANDLE_PX
-	var found := {}
+	var found: Handle = null
 	for si in selected:
-		var outline: PackedVector2Array = map.build_info.outlines[si]
+		var outline := info.outline(si)
 		var h := map.data.sectors[si].floor_height
 		for q in outline:
-			var sp = _screen(_v3(q, h))
-			if sp != null and (sp as Vector2).distance_to(mouse_pos) < best:
-				best = (sp as Vector2).distance_to(mouse_pos)
-				found = {"kind": "vertex", "a": q, "b": q, "h": h}
-	for c in map.build_info.get("outer_corners", []):
-		if not selected.has(int(c.sector)):
+			var d := _screen_distance(_v3(q, h))
+			if d < best:
+				best = d
+				found = Handle.make(Handle.Kind.VERTEX, q, q, h)
+	for c in info.outer_corners:
+		if not selected.has(c.sector):
 			continue
-		var sp = _screen(_v3(c.outer, c.h))
-		if sp != null and (sp as Vector2).distance_to(mouse_pos) < best:
-			best = (sp as Vector2).distance_to(mouse_pos)
-			found = {"kind": "outer_vertex", "sector": int(c.sector), "inner": c.inner, "a": c.outer, "b": c.outer, "h": float(c.h)}
-	if not found.is_empty():
+		var d := _screen_distance(_v3(c.outer, c.h))
+		if d < best:
+			best = d
+			found = Handle.make(Handle.Kind.OUTER_VERTEX, c.outer, c.outer, c.h)
+			found.sector = c.sector
+			found.inner = c.inner
+	if found != null:
 		return found
 	best = EDGE_PX
 	for si in selected:
-		var outline: PackedVector2Array = map.build_info.outlines[si]
+		var outline := info.outline(si)
 		var h := map.data.sectors[si].floor_height
 		for i in range(0, outline.size(), 2):
-			var sa = _screen(_v3(outline[i], h))
-			var sb = _screen(_v3(outline[i + 1], h))
-			if sa == null or sb == null:
-				continue
-			var c := Geometry2D.get_closest_point_to_segment(mouse_pos, sa, sb)
-			if c.distance_to(mouse_pos) < best:
-				best = c.distance_to(mouse_pos)
-				found = {"kind": "edge", "a": outline[i], "b": outline[i + 1], "h": h}
-	for e in map.build_info.get("outer_edges", []):
-		if not selected.has(int(e.sector)):
+			var d := _segment_distance(_v3(outline[i], h), _v3(outline[i + 1], h))
+			if d < best:
+				best = d
+				found = Handle.make(Handle.Kind.EDGE, outline[i], outline[i + 1], h)
+	for e in info.outer_edges:
+		if not selected.has(e.sector):
 			continue
-		var sa = _screen(_v3(e.a2, e.h))
-		var sb = _screen(_v3(e.b2, e.h))
-		if sa == null or sb == null:
-			continue
-		var c := Geometry2D.get_closest_point_to_segment(mouse_pos, sa, sb)
-		if c.distance_to(mouse_pos) < best:
-			best = c.distance_to(mouse_pos)
-			found = {"kind": "outer_edge", "sector": int(e.sector), "inner_a": e.a, "inner_b": e.b,
-				"out": e.out, "thickness": float(e.thickness), "a": e.a2, "b": e.b2, "h": float(e.h)}
+		var d := _segment_distance(_v3(e.a2, e.h), _v3(e.b2, e.h))
+		if d < best:
+			best = d
+			found = Handle.make(Handle.Kind.OUTER_EDGE, e.a2, e.b2, e.h)
+			found.sector = e.sector
+			found.inner_a = e.a
+			found.inner_b = e.b
+			found.out = e.out
+			found.thickness = e.thickness
 	return found
 
 
+## Screen distance from the mouse to a map point (INF when off screen).
+func _screen_distance(local: Vector3) -> float:
+	var sp := _screen(local)
+	return INF if sp == NOWHERE else sp.distance_to(mouse_pos)
+
+
+## Screen distance from the mouse to a map segment (INF when off screen).
+func _segment_distance(a: Vector3, b: Vector3) -> float:
+	var sa := _screen(a)
+	var sb := _screen(b)
+	if sa == NOWHERE or sb == NOWHERE:
+		return INF
+	return Geometry2D.get_closest_point_to_segment(mouse_pos, sa, sb).distance_to(mouse_pos)
+
+
 func _start_drag() -> void:
-	var start = _plane_point(float(handle.h))
-	drag = handle.duplicate()
-	drag["before"] = map.data.duplicate_data()
-	drag["start"] = start if start != null else handle.a
-	drag["valid"] = true
-	drag["moved"] = false
-	drag["to_a"] = handle.a
-	drag["to_b"] = handle.b
+	var start := _plane_point(handle.h)
+	drag = Drag.new()
+	drag.handle = handle
+	drag.before = map.data.duplicate_data()
+	drag.start = start if start != NOWHERE else handle.a
+	drag.to_a = handle.a
+	drag.to_b = handle.b
+	drag.thickness_now = handle.thickness
 	_consume_release = false
 
 
 func _update_drag() -> void:
-	var p = _plane_point(float(drag.h))
-	if p == null:
+	var hd := drag.handle
+	var p := _plane_point(hd.h)
+	if p == NOWHERE:
 		return
-	var a: Vector2 = drag.a
-	var b: Vector2 = drag.b
-	if drag.kind == "outer_vertex" or drag.kind == "outer_edge":
+	var a := hd.a
+	var b := hd.b
+	if hd.kind == Handle.Kind.OUTER_VERTEX or hd.kind == Handle.Kind.OUTER_EDGE:
 		_update_outer_drag(p)
 		return
 	var from := PackedVector2Array()
 	var to := PackedVector2Array()
-	if drag.kind == "vertex":
-		var target := _snap_point(p, float(drag.h), PackedVector2Array(), {DMMapData.key_of(a): true})
+	if hd.kind == Handle.Kind.VERTEX:
+		var target := _snap_point(p, hd.h, PackedVector2Array(), {DMMapData.key_of(a): true})
 		from.append(a)
 		to.append(target)
 		drag.to_a = target
 		drag.to_b = target
 	else:
-		var d: Vector2 = (p as Vector2) - (drag.start as Vector2)
+		var d := p - drag.start
 		if not Input.is_key_pressed(KEY_SHIFT):
-			var step: float = plugin.grid_step
+			var step := editor.grid_step
 			d = d.snapped(Vector2(step, step))
 		from.append_array([a, b])
 		to.append_array([a + d, b + d])
 		drag.to_a = a + d
 		drag.to_b = b + d
-	drag.moved = not (drag.to_a as Vector2).is_equal_approx(a) or not (drag.to_b as Vector2).is_equal_approx(b)
-	map.data.copy_from(drag.before)
+	drag.moved = not drag.to_a.is_equal_approx(a) or not drag.to_b.is_equal_approx(b)
+	# Every mouse move restarts from the snapshot. No changed signals (the
+	# dock and toolbar refresh once the drag ends) and no collision rebuild
+	# (it's brought up to date in _end_drag).
+	map.data.copy_from(drag.before, false)
 	if drag.moved:
-		map.data.move_vertices(from, to)
+		map.data.move_vertices(from, to, false)
 	drag.valid = map.data.validate() == ""
-	map.rebuild()
+	map.rebuild(false)
 
 
 ## Dragging a thick wall's outer corner (placed freely) or outer face
 ## (changes that wall's thickness).
 func _update_outer_drag(p: Vector2) -> void:
-	var a: Vector2 = drag.a
-	map.data.copy_from(drag.before)
-	var s: DMSector = map.data.sectors[int(drag.sector)]
-	if drag.kind == "outer_vertex":
-		var target := _snap_point(p, float(drag.h))
+	var hd := drag.handle
+	map.data.copy_from(drag.before, false)
+	var s := map.data.sectors[hd.sector]
+	if hd.kind == Handle.Kind.OUTER_VERTEX:
+		var target := _snap_point(p, hd.h)
 		drag.to_a = target
 		drag.to_b = target
-		drag.moved = not target.is_equal_approx(a)
+		drag.moved = not target.is_equal_approx(hd.a)
 		if drag.moved:
-			s.outer_corners[DMMapData.key_of(drag.inner)] = target - (drag.inner as Vector2)
+			s.outer_corners[DMMapData.key_of(hd.inner)] = target - hd.inner
 	else:
-		var out: Vector2 = drag.out
-		var t := maxf((p - (drag.inner_a as Vector2)).dot(out), 0.0)
+		var t := maxf((p - hd.inner_a).dot(hd.out), 0.0)
 		if not Input.is_key_pressed(KEY_SHIFT):
-			t = maxf(snappedf(t, float(plugin.grid_step)), 0.0)
+			t = maxf(snappedf(t, editor.grid_step), 0.0)
 		drag.thickness_now = t
-		drag.to_a = (drag.inner_a as Vector2) + out * t
-		drag.to_b = (drag.inner_b as Vector2) + out * t
-		drag.moved = not is_equal_approx(t, float(drag.thickness))
+		drag.to_a = hd.inner_a + hd.out * t
+		drag.to_b = hd.inner_b + hd.out * t
+		drag.moved = not is_equal_approx(t, hd.thickness)
 		if drag.moved:
-			var edge := s.override_edge(drag.inner_a, drag.inner_b)
+			var edge := s.override_edge(hd.inner_a, hd.inner_b)
 			s.set_wall_override(edge[0], edge[1], {"thickness": t})
-			s.clear_outer_corners([drag.inner_a, drag.inner_b])
+			s.clear_outer_corners([hd.inner_a, hd.inner_b])
 	drag.valid = true
-	map.rebuild()
+	map.rebuild(false)
+
+
+## Undo names for drags, by Handle.Kind.
+const DRAG_ACTIONS: Array[String] = ["Move Corner", "Move Wall", "Move Wall Corner", "Set Wall Thickness"]
 
 
 func _end_drag() -> void:
 	var d := drag
-	drag = {}
+	drag = null
 	var why := map.data.validate()
 	if not why.is_empty():
 		map.data.copy_from(d.before)
 		map.rebuild()
-		plugin.notify("Can't move it there: " + why + ".")
+		editor.notify("Can't move it there: " + why + ".")
 	elif d.moved:
-		var names := {"vertex": "Move Corner", "edge": "Move Wall", "outer_vertex": "Move Wall Corner", "outer_edge": "Set Wall Thickness"}
-		plugin.commit_snapshot(names.get(d.kind, "Move"), d.before)
+		editor.commit_snapshot(DRAG_ACTIONS[d.handle.kind], d.before)
+	# A drag that ended where it started (or a commit that didn't rebuild)
+	# still owes the collision shape its update.
+	map.ensure_built()
 	_update_hover()
 	_changed()
 
 
 func cancel_drag() -> void:
-	if drag.is_empty() or map == null:
-		drag = {}
+	if drag == null or map == null:
+		drag = null
 		return
 	map.data.copy_from(drag.before)
 	map.rebuild()
-	drag = {}
+	drag = null
 	_changed()
 
 
 func _changed() -> void:
-	if plugin != null:
-		plugin.on_tool_changed()
+	if editor != null:
+		editor.on_tool_changed()
 
 
 # --- Overlay -----------------------------------------------------------------
@@ -662,43 +982,62 @@ func draw_overlay(overlay: Control) -> void:
 
 	# Selected sectors: outline at floor and ceiling height.
 	for si in selected:
-		var outline: PackedVector2Array = info.outlines[si] if si < (info.outlines as Array).size() else PackedVector2Array()
+		var outline := info.outline(si)
 		var s := sectors[si]
 		for i in range(0, outline.size(), 2):
 			_line3(overlay, _v3(outline[i], s.floor_height), _v3(outline[i + 1], s.floor_height), COLOR_SELECTED, 3.0)
 			_line3(overlay, _v3(outline[i], s.ceiling_height), _v3(outline[i + 1], s.ceiling_height), Color(COLOR_SELECTED, 0.45), 1.5)
 
 	_draw_hidden_walls(overlay)
-	if not selected_wall.is_empty():
+	if selected_wall != null:
 		_draw_selected_wall(overlay)
 	if mode == Mode.SELECT:
 		_draw_handles(overlay)
-	if mode == Mode.SELECT and drag.is_empty() and handle.is_empty() and not hover.is_empty():
-		_draw_face_outline(overlay, int(hover.face), COLOR_HOVER, 2.0)
-		var s := sectors[int(hover.sector)]
-		var part := int(hover.part)
+	if mode == Mode.SELECT and drag == null and handle == null and hover != null:
+		_draw_face_outline(overlay, hover.face, COLOR_HOVER, 2.0)
+		var s := sectors[hover.sector]
+		var part := hover.part
 		var text := "Wall"
 		if part == DMBuilder.Part.FLOOR:
-			text = "Floor  " + DMUnits.format(s.floor_height, plugin.units)
+			text = "Floor  " + DMUnits.format(s.floor_height, editor.units)
 		elif part == DMBuilder.Part.CEILING:
-			text = "Ceiling  " + DMUnits.format(s.ceiling_height, plugin.units)
+			text = "Ceiling  " + DMUnits.format(s.ceiling_height, editor.units)
 		_label(overlay, mouse_pos + Vector2(16, -8), text, Color.WHITE)
 
+	if box_active:
+		var r := Rect2(box_start, Vector2.ZERO).expand(mouse_pos)
+		overlay.draw_rect(r, Color(COLOR_SELECTED, 0.12))
+		overlay.draw_rect(r, COLOR_SELECTED, false, 1.5)
 	if mode == Mode.DRAW:
 		_draw_drawing(overlay)
 	elif mode == Mode.RECT:
 		_draw_rect(overlay)
+	elif mode == Mode.PASTE:
+		_draw_paste(overlay)
+
+
+func _draw_paste(overlay: Control) -> void:
+	if cursor_valid:
+		var xf := paste_transform()
+		var h := draw_height
+		for s in editor.clipboard:
+			for p in s.polygons:
+				for i in p.size():
+					_line3(overlay, _v3(xf * p[i], h), _v3(xf * p[(i + 1) % p.size()], h), COLOR_DRAW, 2.5)
+		_marker(overlay, _v3(cursor, h), COLOR_DRAW, 5.0)
+	var hint := "Paste:  click to place (it cuts what's under it, like drawing)  •  R / Shift+R rotate 90°  •  E / Shift+E rotate %s°  •  M mirrors  •  Shift: no grid snap  •  Esc cancels" % str(snappedf(editor.rotate_angle, 0.01))
+	_label(overlay, Vector2(12, overlay.size.y - 14), hint, Color(1, 1, 1, 0.85))
 
 
 ## Faces built from the selected wall's edge.
 func selected_wall_faces() -> Array[int]:
 	var out: Array[int] = []
-	if selected_wall.is_empty():
+	if selected_wall == null:
 		return out
-	var fe: PackedVector2Array = map.build_info.face_edge
-	var fs: PackedInt32Array = map.build_info.face_sector
+	var fe := map.build_info.face_edge
+	var fs := map.build_info.face_sector
 	for f in fs.size():
-		if fs[f] == int(selected_wall.sector) and fe[f * 2].is_equal_approx(selected_wall.a) \
+		if fs[f] == selected_wall.sector and fe[f * 2].is_equal_approx(selected_wall.a) \
 				and fe[f * 2 + 1].is_equal_approx(selected_wall.b):
 			out.append(f)
 	return out
@@ -707,72 +1046,71 @@ func selected_wall_faces() -> Array[int]:
 func _draw_selected_wall(overlay: Control) -> void:
 	for f in selected_wall_faces():
 		_draw_face_outline(overlay, f, Color.WHITE, 3.0)
-	var s: DMSector = map.data.sectors[int(selected_wall.sector)]
+	var s := map.data.sectors[selected_wall.sector]
 	var o := s.wall_override(selected_wall.a, selected_wall.b)
-	if o.get("hidden", false):
-		_dashed_wall(overlay, selected_wall.a, selected_wall.b, o.get("bottom", s.floor_height), o.get("top", s.ceiling_height), Color.WHITE)
+	if DMSector.setting_bool(o, "hidden"):
+		_dashed_wall(overlay, selected_wall.a, selected_wall.b, DMSector.setting_float(o, "bottom", s.floor_height),
+			DMSector.setting_float(o, "top", s.ceiling_height), Color.WHITE)
 
 
 ## Hidden walls of the selected sectors, as dashed outlines.
 func _draw_hidden_walls(overlay: Control) -> void:
-	for hw in map.build_info.get("hidden_walls", []):
-		if selected.has(int(hw[4])):
-			_dashed_wall(overlay, hw[0], hw[1], hw[2], hw[3], Color(COLOR_SELECTED, 0.8))
+	for hw in map.build_info.hidden_walls:
+		if selected.has(hw.sector):
+			_dashed_wall(overlay, hw.p0, hw.p1, hw.bottom, hw.top, Color(COLOR_SELECTED, 0.8))
 
 
 func _dashed_wall(overlay: Control, p0: Vector2, p1: Vector2, bottom: float, top: float, color: Color) -> void:
-	var c := [_v3(p0, bottom), _v3(p1, bottom), _v3(p1, top), _v3(p0, top)]
+	var c := PackedVector3Array([_v3(p0, bottom), _v3(p1, bottom), _v3(p1, top), _v3(p0, top)])
 	for i in 4:
-		var sa = _screen(c[i])
-		var sb = _screen(c[(i + 1) % 4])
-		if sa != null and sb != null:
+		var sa := _screen(c[i])
+		var sb := _screen(c[(i + 1) % 4])
+		if sa != NOWHERE and sb != NOWHERE:
 			overlay.draw_dashed_line(sa, sb, color, 2.0, 6.0)
 
 
 func _draw_handles(overlay: Control) -> void:
 	var info := map.build_info
 	for si in selected:
-		if si >= (info.outlines as Array).size():
-			continue
-		var outline: PackedVector2Array = info.outlines[si]
 		var h := map.data.sectors[si].floor_height
-		for q in outline:
-			var sp = _screen(_v3(q, h))
-			if sp != null:
-				overlay.draw_rect(Rect2((sp as Vector2) - Vector2(3.5, 3.5), Vector2(7, 7)), Color(0, 0, 0, 0.7))
-				overlay.draw_rect(Rect2((sp as Vector2) - Vector2(2.5, 2.5), Vector2(5, 5)), COLOR_SELECTED)
-	for c in info.get("outer_corners", []):
-		if selected.has(int(c.sector)):
-			var sp = _screen(_v3(c.outer, c.h))
-			if sp != null:
-				overlay.draw_rect(Rect2((sp as Vector2) - Vector2(3.5, 3.5), Vector2(7, 7)), Color(0, 0, 0, 0.7))
-				overlay.draw_rect(Rect2((sp as Vector2) - Vector2(2.5, 2.5), Vector2(5, 5)), COLOR_DRAW)
-	var active := drag if not drag.is_empty() else handle
-	if active.is_empty():
+		for q in info.outline(si):
+			_square(overlay, _v3(q, h), COLOR_SELECTED)
+	for c in info.outer_corners:
+		if selected.has(c.sector):
+			_square(overlay, _v3(c.outer, c.h), COLOR_DRAW)
+	var active := drag.handle if drag != null else handle
+	if active == null:
 		return
-	var color := COLOR_BAD if not drag.is_empty() and not drag.valid else Color.WHITE
-	var h := float(active.h)
-	var a: Vector2 = active.get("to_a", active.a)
-	var b: Vector2 = active.get("to_b", active.b)
-	var is_edge: bool = active.kind == "edge" or active.kind == "outer_edge"
-	if is_edge:
+	var color := COLOR_BAD if drag != null and not drag.valid else Color.WHITE
+	var h := active.h
+	var a := drag.to_a if drag != null else active.a
+	var b := drag.to_b if drag != null else active.b
+	if active.is_edge():
 		_line3(overlay, _v3(a, h), _v3(b, h), color, 4.0)
 		_length_label(overlay, a, b, h)
 	_marker(overlay, _v3(a, h), color, 5.0)
-	if is_edge:
+	if active.is_edge():
 		_marker(overlay, _v3(b, h), color, 5.0)
-	var tips := {"vertex": "Drag to move this corner", "edge": "Drag to move this wall",
-		"outer_vertex": "Drag to reshape the thick wall's outer corner", "outer_edge": "Drag to change this wall's thickness"}
-	var tip: String = tips.get(active.kind, "")
-	if not drag.is_empty() and active.kind == "outer_edge":
-		tip = "Thickness: " + DMUnits.format(float(drag.get("thickness_now", drag.thickness)), plugin.units)
-	elif not drag.is_empty() and active.kind == "outer_vertex":
-		tip = "Corner: %s, %s" % [DMUnits.format(a.x, plugin.units), DMUnits.format(a.y, plugin.units)]
-	elif not drag.is_empty():
+	var tips: Array[String] = ["Drag to move this corner  •  Delete removes it", "Drag to move this wall  •  double-click adds a corner",
+		"Drag to reshape the thick wall's outer corner", "Drag to change this wall's thickness"]
+	var tip := tips[active.kind]
+	var u := editor.units
+	if drag != null and active.kind == Handle.Kind.OUTER_EDGE:
+		tip = "Thickness: " + DMUnits.format(drag.thickness_now, u)
+	elif drag != null and active.kind == Handle.Kind.OUTER_VERTEX:
+		tip = "Corner: %s, %s" % [DMUnits.format(a.x, u), DMUnits.format(a.y, u)]
+	elif drag != null:
 		tip = "Can't go here (sides would cross or overlap)" if not drag.valid else (
-			"Corner: %s, %s" % [DMUnits.format(a.x, plugin.units), DMUnits.format(a.y, plugin.units)]
-			if active.kind == "vertex" else "Moved %s" % DMUnits.format(a.distance_to(active.a), plugin.units))
+			"Corner: %s, %s" % [DMUnits.format(a.x, u), DMUnits.format(a.y, u)]
+			if active.kind == Handle.Kind.VERTEX else "Moved %s" % DMUnits.format(a.distance_to(active.a), u))
 	_label(overlay, mouse_pos + Vector2(16, -8), tip, color)
+
+
+func _square(overlay: Control, local: Vector3, color: Color) -> void:
+	var sp := _screen(local)
+	if sp != NOWHERE:
+		overlay.draw_rect(Rect2(sp - Vector2(3.5, 3.5), Vector2(7, 7)), Color(0, 0, 0, 0.7))
+		overlay.draw_rect(Rect2(sp - Vector2(2.5, 2.5), Vector2(5, 5)), color)
 
 
 func _draw_drawing(overlay: Control) -> void:
@@ -780,21 +1118,21 @@ func _draw_drawing(overlay: Control) -> void:
 	for i in range(1, points.size()):
 		_line3(overlay, _v3(points[i - 1], h), _v3(points[i], h), COLOR_DRAW, 2.5)
 		_length_label(overlay, points[i - 1], points[i], h)
-	var tp = typed_point()
+	var tp := typed_point()
 	if cursor_valid:
-		var closing := tp == null and points.size() >= 3 and _near_first()
+		var closing := tp == NOWHERE and points.size() >= 3 and _near_first()
 		if not points.is_empty():
-			var end: Vector2 = tp if tp != null else (points[0] if closing else cursor)
+			var end := tp if tp != NOWHERE else (points[0] if closing else cursor)
 			_line3(overlay, _v3(points[points.size() - 1], h), _v3(end, h), Color(COLOR_DRAW, 0.6), 2.0)
 			_length_label(overlay, points[points.size() - 1], end, h)
-			if tp != null:
+			if tp != NOWHERE:
 				_marker(overlay, _v3(tp, h), COLOR_DRAW, 4.0)
 		_marker(overlay, _v3(cursor, h), COLOR_CLOSE if closing else COLOR_DRAW, 5.0)
 	for i in points.size():
 		_marker(overlay, _v3(points[i], h), COLOR_CLOSE if i == 0 and points.size() >= 3 else COLOR_DRAW, 3.5)
 	if not typed.is_empty():
 		_label(overlay, mouse_pos + Vector2(16, 18), "Length: %s▏%s   Enter places the point" % [
-			typed, DMUnits.suffix(plugin.units)], COLOR_DRAW)
+			typed, DMUnits.suffix(editor.units)], COLOR_DRAW)
 	var hint := "Draw sector:  click to add points  •  type a length + Enter for an exact side  •  click the first point or Enter to finish  •  Backspace undoes  •  Shift: free angle / no snap  •  Esc cancels"
 	_label(overlay, Vector2(12, overlay.size.y - 14), hint, Color(1, 1, 1, 0.85))
 
@@ -807,20 +1145,20 @@ func _draw_rect(overlay: Control) -> void:
 	if rect_started:
 		var a := rect_anchor
 		var c := rect_corner()
-		var corners := [a, Vector2(c.x, a.y), c, Vector2(a.x, c.y)]
+		var corners := PackedVector2Array([a, Vector2(c.x, a.y), c, Vector2(a.x, c.y)])
 		for i in 4:
 			_line3(overlay, _v3(corners[i], h), _v3(corners[(i + 1) % 4], h), COLOR_DRAW, 2.5)
 		_marker(overlay, _v3(a, h), COLOR_DRAW, 4.0)
 		_length_label(overlay, corners[0], corners[1], h)
 		_length_label(overlay, corners[1], corners[2], h)
-		var fields := ["Width", "Depth"]
-		var parts := []
+		var fields: Array[String] = ["Width", "Depth"]
+		var parts := PackedStringArray()
 		for f in 2:
-			var value := DMUnits.format(absf(c.x - a.x) if f == 0 else absf(c.y - a.y), plugin.units)
+			var value := DMUnits.format(absf(c.x - a.x) if f == 0 else absf(c.y - a.y), editor.units)
 			if f == rect_field and not typed.is_empty():
-				value = "%s▏%s" % [typed, DMUnits.suffix(plugin.units)]
-			var locked: bool = rect_size[f] > 0.0 or (f == rect_field and not typed.is_empty())
-			var text: String = "%s: %s" % [fields[f], value]
+				value = "%s▏%s" % [typed, DMUnits.suffix(editor.units)]
+			var locked := rect_size[f] > 0.0 or (f == rect_field and not typed.is_empty())
+			var text := "%s: %s" % [fields[f], value]
 			if locked:
 				text += " (set)"
 			parts.append(("[ %s ]" % text) if f == rect_field else text)
@@ -830,10 +1168,10 @@ func _draw_rect(overlay: Control) -> void:
 
 
 func _draw_face_outline(overlay: Control, f: int, color: Color, width: float) -> void:
-	var faces: Array = map.build_info.get("face_points", [])
+	var faces := map.build_info.face_points
 	if f < 0 or f >= faces.size():
 		return
-	var pts: PackedVector3Array = faces[f]
+	var pts := faces[f]
 	for i in pts.size():
 		_line3(overlay, pts[i], pts[(i + 1) % pts.size()], color, width)
 
@@ -842,34 +1180,34 @@ func _length_label(overlay: Control, a: Vector2, b: Vector2, h: float) -> void:
 	var length := a.distance_to(b)
 	if length < 1e-4:
 		return
-	var sp = _screen(_v3((a + b) * 0.5, h))
-	if sp != null:
-		_label(overlay, (sp as Vector2) + Vector2(6, -6), DMUnits.format(length, plugin.units), Color.WHITE)
+	var sp := _screen(_v3((a + b) * 0.5, h))
+	if sp != NOWHERE:
+		_label(overlay, sp + Vector2(6, -6), DMUnits.format(length, editor.units), Color.WHITE)
 
 
 static func _v3(p: Vector2, h: float) -> Vector3:
 	return Vector3(p.x, h, p.y)
 
 
-## Map-local point to screen, or null when behind the camera.
-func _screen(local: Vector3) -> Variant:
+## Map-local point to screen, or NOWHERE when behind the camera.
+func _screen(local: Vector3) -> Vector2:
 	var world := map.map_transform() * local
 	if camera.is_position_behind(world):
-		return null
+		return NOWHERE
 	return camera.unproject_position(world)
 
 
 func _line3(overlay: Control, a: Vector3, b: Vector3, color: Color, width: float) -> void:
-	var sa = _screen(a)
-	var sb = _screen(b)
-	if sa == null or sb == null:
+	var sa := _screen(a)
+	var sb := _screen(b)
+	if sa == NOWHERE or sb == NOWHERE:
 		return
 	overlay.draw_line(sa, sb, color, width, true)
 
 
 func _marker(overlay: Control, local: Vector3, color: Color, radius: float) -> void:
-	var sp = _screen(local)
-	if sp != null:
+	var sp := _screen(local)
+	if sp != NOWHERE:
 		overlay.draw_circle(sp, radius + 1.5, Color(0, 0, 0, 0.6))
 		overlay.draw_circle(sp, radius, color)
 
