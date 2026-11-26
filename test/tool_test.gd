@@ -167,6 +167,43 @@ func _run() -> void:
 	click(screen(10, 10))
 	key(KEY_ESCAPE)
 	check(tool.mode == DMTool.Mode.SELECT and tool.points.is_empty() and map.data.sectors.size() == 2, "Esc cancels a drawing")
+
+	# Stopping a polygon with 2+ points keeps it unfinished; either end continues it.
+	key(KEY_D)
+	click(screen(100, 0))
+	click(screen(104, 0))
+	click(screen(104, 4))
+	key(KEY_ESCAPE)
+	check(tool.mode == DMTool.Mode.SELECT and map.data.drafts.size() == 1 and map.data.drafts[0].points.size() == 3
+		and plugin.commits.back() == "Keep Unfinished Polygon", "Esc keeps a 3-point polygon unfinished")
+	check(map.data.duplicate_data().drafts.size() == 1, "undo snapshots include unfinished polygons")
+	move(screen(104, 4))
+	check(tool.draft_hover == 0 and tool.draft_hover_end == 1, "hovering its last point offers to continue it")
+	click(screen(104, 4))
+	check(tool.mode == DMTool.Mode.DRAW and tool.points.size() == 3 and tool.draft_index == 0, "clicking its end continues drawing it")
+	click(screen(100, 4))
+	click(screen(100, 0))
+	check(map.data.sectors.size() == 3 and map.data.drafts.is_empty() and plugin.commits.back() == "Draw Sector",
+		"closing it makes the sector and removes the unfinished polygon")
+	map.data.delete_sectors([2])
+	key(KEY_D)
+	click(screen(110, 0))
+	click(screen(114, 0))
+	key(KEY_ESCAPE)
+	var commits_now := plugin.commits.size()
+	click(screen(110, 0))
+	check(tool.mode == DMTool.Mode.DRAW and tool.points[tool.points.size() - 1].is_equal_approx(Vector2(110, 0)),
+		"clicking its first point continues from that end")
+	key(KEY_ESCAPE)
+	check(map.data.drafts.size() == 1 and plugin.commits.size() == commits_now, "stopping again with nothing added changes nothing")
+	key(KEY_D)
+	click(screen(120, 0))
+	key(KEY_ESCAPE)
+	check(map.data.drafts.size() == 1, "a single point isn't kept")
+	move(screen(112, 0))
+	key(KEY_DELETE)
+	check(map.data.drafts.is_empty() and plugin.commits.back() == "Discard Unfinished Polygon", "Delete over its side discards it")
+	check(map.data.sectors.size() == 2, "...and deletes no sector")
 	key(KEY_BRACKETRIGHT)
 	check(plugin.grid_shifts == 1, "] asks for a larger grid")
 	click(screen(1, 1))
@@ -424,6 +461,16 @@ func _run() -> void:
 	key(KEY_DELETE)
 	check(map4.data.sectors[0].polygons[0].size() == 4 and plugin.commits.back() == "Remove Corner" and map4.data.sectors.size() == 2,
 		"Delete over a corner removes just the corner")
+	var del := InputEventKey.new()
+	del.keycode = KEY_DELETE
+	del.pressed = true
+	tool.handle_input(cam, del)
+	var rep := del.duplicate() as InputEventKey
+	rep.echo = true
+	tool.handle_input(cam, rep)
+	key(KEY_DELETE)
+	check(map4.data.sectors.size() == 2 and plugin.commits.back() == "Remove Corner",
+		"pressing Delete again (or holding it) where the corner was doesn't delete the sector")
 
 	# Box select: drag from a floor across the rooms (the left mouse held).
 	var box_drag := func(a: Vector2, b: Vector2, shift: bool, cancel: bool) -> void:

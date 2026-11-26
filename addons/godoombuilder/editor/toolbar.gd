@@ -39,9 +39,9 @@ func build() -> void:
 	var tools := ButtonGroup.new()
 	select_button = _button("Select", "Select sectors and walls, drag corners and walls (Esc).", true, tools)
 	select_button.pressed.connect(func() -> void: editor.set_drawing(false))
-	draw_button = _button("Draw", "Draw a sector point by point (D). Type a length + Enter for an exact side.", true, tools)
+	draw_button = _button("Polygon", "Draw a polygon sector point by point (D). Type a length + Enter for an exact side.", true, tools)
 	draw_button.pressed.connect(func() -> void: editor.set_drawing(true, false))
-	rect_button = _button("Rectangle", "Draw a rectangle (B). Type width, Tab, depth, Enter for an exact size.", true, tools)
+	rect_button = _button("Rectangle", "Draw a rectangle sector (B). Type width, Tab, depth, Enter for an exact size.", true, tools)
 	rect_button.pressed.connect(func() -> void: editor.set_drawing(true, true))
 
 	add_child(VSeparator.new())

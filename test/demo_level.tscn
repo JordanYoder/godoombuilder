@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://snpxrrg27mbs" path="res://addons/godoombuilder/nodes/map.gd" id="1_bu8gv"]
 [ext_resource type="Script" uid="uid://c4wp655fidglt" path="res://addons/godoombuilder/core/map_data.gd" id="2_1rdli"]
+[ext_resource type="Script" uid="uid://bqmvjh36fu8r1" path="res://addons/godoombuilder/core/draft.gd" id="2_bu8gv"]
 [ext_resource type="Script" uid="uid://dsxyp0cqi5w88" path="res://addons/godoombuilder/core/sector.gd" id="3_tjuuh"]
 [ext_resource type="Material" uid="uid://buthw8ig3wkl4" path="res://test/materials/demo_ceiling.tres" id="4_cyi7p"]
 [ext_resource type="Material" uid="uid://cbglbvfkeuot8" path="res://test/materials/demo_floor.tres" id="5_pugwu"]
@@ -18,7 +19,7 @@ ambient_light_color = Color(0.6, 0.6, 0.65, 1)
 ambient_light_energy = 0.55
 tonemap_mode = 2
 
-[sub_resource type="Resource" id="Resource_6p8kv"]
+[sub_resource type="Resource" id="Resource_1rdli"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(2.5, 6, 1.5, 6, 1.5, 9, 2.5, 9, 2.5, 10, 0, 10, 0, 0, 2.5, 0), PackedVector2Array(3.3333, 10, 2.5, 10, 2.5, 9, 3.3333, 9), PackedVector2Array(3.3333, 2, 3, 2, 3, 3, 3.3333, 3, 3.3333, 6, 2.5, 6, 2.5, 0, 3.3333, 0), PackedVector2Array(7.6667, 2, 7.5, 2, 7.5, 8, 7.6667, 8, 7.6667, 10, 3.3333, 10, 3.3333, 9, 4.5, 9, 4.5, 6, 3.3333, 6, 3.3333, 3, 4, 3, 4, 2, 3.3333, 2, 3.3333, 0, 7.6667, 0), PackedVector2Array(12, 10, 7.6667, 10, 7.6667, 8, 12, 8), PackedVector2Array(12, 2, 7.6667, 2, 7.6667, 0, 12, 0)])
 ceiling_height = 5.0
@@ -26,7 +27,7 @@ floor_material = ExtResource("5_pugwu")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_bu8gv"]
+[sub_resource type="Resource" id="Resource_tjuuh"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(7.5, 2, 8, 2, 8, 8, 7.5, 8)])
 floor_height = 0.25
@@ -35,7 +36,7 @@ floor_material = ExtResource("7_odf88")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_1rdli"]
+[sub_resource type="Resource" id="Resource_cyi7p"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(8, 2, 8.5, 2, 8.5, 8, 8, 8)])
 floor_height = 0.5
@@ -44,7 +45,7 @@ floor_material = ExtResource("7_odf88")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_tjuuh"]
+[sub_resource type="Resource" id="Resource_pugwu"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(8.5, 2, 9, 2, 9, 8, 8.5, 8)])
 floor_height = 0.75
@@ -53,7 +54,7 @@ floor_material = ExtResource("7_odf88")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_cyi7p"]
+[sub_resource type="Resource" id="Resource_okmyw"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(9, 2, 12, 2, 12, 8, 9, 8)])
 floor_height = 1.0
@@ -62,7 +63,7 @@ floor_material = ExtResource("5_pugwu")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_pugwu"]
+[sub_resource type="Resource" id="Resource_odf88"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(1.5, 6, 4.5, 6, 4.5, 9, 1.5, 9)])
 floor_height = -0.75
@@ -71,7 +72,7 @@ floor_material = ExtResource("5_pugwu")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_okmyw"]
+[sub_resource type="Resource" id="Resource_nq7xy"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(4, 10, 6, 10, 6, 16, 4, 16)])
 ceiling_height = 2.5
@@ -79,7 +80,7 @@ floor_material = ExtResource("5_pugwu")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_odf88"]
+[sub_resource type="Resource" id="Resource_al0uj"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(4.3333, 18, 3, 18, 3, 22, 4.3333, 22, 4.3333, 24, 0, 24, 0, 16, 4.3333, 16), PackedVector2Array(10, 24, 4.3333, 24, 4.3333, 22, 7, 22, 7, 18, 4.3333, 18, 4.3333, 16, 10, 16)])
 floor_height = 0.5
@@ -87,7 +88,7 @@ floor_material = ExtResource("5_pugwu")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_nq7xy"]
+[sub_resource type="Resource" id="Resource_gx0wo"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(3, 18, 7, 18, 7, 22, 3, 22)])
 floor_height = 0.25
@@ -97,7 +98,7 @@ floor_material = ExtResource("8_nq7xy")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_al0uj"]
+[sub_resource type="Resource" id="Resource_01e7p"]
 script = ExtResource("3_tjuuh")
 polygons = Array[PackedVector2Array]([PackedVector2Array(8.5, -2.5, 8.5, 0, 5.5, 0, 5.5, -2.5)])
 ceiling_height = 3.0
@@ -125,7 +126,10 @@ wall_overrides = Array[Dictionary]([{
 
 [sub_resource type="Resource" id="Resource_bs2jk"]
 script = ExtResource("2_1rdli")
-sectors = Array[ExtResource("3_tjuuh")]([SubResource("Resource_6p8kv"), SubResource("Resource_bu8gv"), SubResource("Resource_1rdli"), SubResource("Resource_tjuuh"), SubResource("Resource_cyi7p"), SubResource("Resource_pugwu"), SubResource("Resource_okmyw"), SubResource("Resource_odf88"), SubResource("Resource_nq7xy"), SubResource("Resource_al0uj")])
+sectors = Array[ExtResource("3_tjuuh")]([SubResource("Resource_1rdli"), SubResource("Resource_tjuuh"), SubResource("Resource_cyi7p"), SubResource("Resource_pugwu"), SubResource("Resource_okmyw"), SubResource("Resource_odf88"), SubResource("Resource_nq7xy"), SubResource("Resource_al0uj"), SubResource("Resource_gx0wo"), SubResource("Resource_01e7p")])
+
+[sub_resource type="Resource" id="Resource_bu8gv"]
+script = ExtResource("2_1rdli")
 
 [node name="DemoLevel" type="Node3D" unique_id=249409237]
 
@@ -167,3 +171,7 @@ light_energy = 1.2
 
 [node name="FPSPlayer" parent="." unique_id=1508946273 instance=ExtResource("9_al0uj")]
 transform = Transform3D(-1, 0, -8.742278e-08, 0, 1, 0, 8.742278e-08, 0, -1, 6, 0.05, 2)
+
+[node name="SectorMap2" type="Node3D" parent="." unique_id=319180400]
+script = ExtResource("1_bu8gv")
+data = SubResource("Resource_bu8gv")

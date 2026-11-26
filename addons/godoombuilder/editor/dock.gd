@@ -105,7 +105,7 @@ func _build() -> void:
 	box.add_child(_new_map)
 
 	_draw = Button.new()
-	_draw.text = "Draw Sector  (D)"
+	_draw.text = "Draw Polygon  (D)"
 	_draw.toggle_mode = true
 	_draw.tooltip_text = "Click points on the grid to outline a floor area. Click the first point (or press Enter) to finish."
 	_draw.toggled.connect(func(on: bool) -> void: editor.set_drawing(on, false))
@@ -486,8 +486,9 @@ func _build() -> void:
 	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	help.modulate = Color(1, 1, 1, 0.8)
 	help.text = "\n".join([
-		"D: draw a sector point by point (type a length + Enter for an exact side)",
+		"D: draw a polygon sector point by point (type a length + Enter for an exact side)",
 		"B: draw a rectangle (type width, Tab, depth, Enter for an exact size)",
+		"Esc while drawing a polygon keeps it unfinished (red, saved with the scene): click either end to continue it, or Delete over it to discard it",
 		"Click: select a sector (Shift+click adds)",
 		"Drag a selected sector's corner or wall to reshape it (neighbours follow); Esc while dragging cancels",
 		"Width / Depth in this panel resize the selection exactly",
@@ -496,12 +497,12 @@ func _build() -> void:
 		"J: join the selected sectors into one",
 		"Thicken Walls (in this panel): give the selected rooms solid walls; draw a sector across one to cut a doorway",
 		"Click a wall: select just that wall (set its own height, or Delete to hide it as an opening)",
-		"Double-click a selected sector's wall: add a corner there; Delete over a corner: remove it",
+		"Double-click a selected sector's wall: add a corner there; Delete over a corner: remove it (a triangle keeps its 3)",
 		"Ctrl+C / Ctrl+V: copy / paste sectors (R / E rotate, M mirrors while placing)",
 		"Drag from a floor across rooms: box select (Shift adds)",
 		"Alt+arrows over a surface: move its texture; Ctrl+Shift+C / V: copy / paste its alignment",
 		"Delete: hide the selected wall, or delete the selected sectors",
-		"Esc: cancel drawing / clear selection",
+		"Esc: stop drawing / clear selection",
 		"Top-down map view: numpad 7, then numpad 5 for flat (orthographic)",
 	])
 	controls.add_child(help)

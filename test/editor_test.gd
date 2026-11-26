@@ -274,3 +274,21 @@ func _prefabs() -> void:
 	done(ed2)
 	for path in [PREFAB_PATH, "user://godoombuilder_empty_prefab.tres"]:
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+	# Removing a corner never deletes a sector: a triangle keeps its corners.
+	var tri: Array[PackedVector2Array] = [PackedVector2Array([Vector2(0, 0), Vector2(4, 0), Vector2(0, 4)])]
+	var ed3 := make_editor(tri)
+	ed3.remove_corner(Vector2(4, 0))
+	check(ed3.map.data.sectors.size() == 1 and ed3.map.data.sectors[0].polygons[0].size() == 3
+		and ed3.notes.back().contains("at least 3"), "a triangle's corner can't be removed (the sector would vanish)")
+	# Unfinished polygons are saved with the map and survive a reload.
+	ed3.keep_draft(PackedVector2Array([Vector2(10, 0), Vector2(12, 0), Vector2(12, 3)]), 1.5)
+	var draft_path := "user://godoombuilder_draft_test.tres"
+	ResourceSaver.save(ed3.map.data, draft_path)
+	var loaded := ResourceLoader.load(draft_path, "", ResourceLoader.CACHE_MODE_IGNORE) as DMMapData
+	check(loaded != null and loaded.drafts.size() == 1 and loaded.drafts[0].points.size() == 3
+		and is_equal_approx(loaded.drafts[0].height, 1.5), "an unfinished polygon is saved and loaded with the map")
+	ed3.discard_draft(0)
+	check(ed3.map.data.drafts.is_empty(), "discard_draft removes it")
+	done(ed3)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(draft_path))

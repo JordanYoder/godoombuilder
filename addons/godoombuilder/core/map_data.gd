@@ -5,6 +5,9 @@ extends Resource
 
 
 @export var sectors: Array[DMSector] = []
+## Polygons left unfinished while drawing, to be continued later. They are
+## only shown in the editor and build nothing.
+@export var drafts: Array[DMDraft] = []
 
 
 ## A deep copy for undo snapshots.
@@ -12,6 +15,9 @@ func duplicate_data() -> DMMapData:
 	var d := DMMapData.new()
 	for s in sectors:
 		d.sectors.append(s.duplicate_sector())
+	for dr in drafts:
+		if dr != null:
+			d.drafts.append(dr.duplicate_draft())
 	return d
 
 
@@ -21,6 +27,10 @@ func copy_from(other: DMMapData, emit := true) -> void:
 	sectors.clear()
 	for s in other.sectors:
 		sectors.append(s.duplicate_sector())
+	drafts.clear()
+	for dr in other.drafts:
+		if dr != null:
+			drafts.append(dr.duplicate_draft())
 	if emit:
 		emit_changed()
 
@@ -63,6 +73,9 @@ func check() -> Array[String]:
 		for o in s.wall_overrides:
 			if not (o.get("a") is Vector2 and o.get("b") is Vector2):
 				out.append("sector %d has a wall setting without its edge" % si)
+	for di in drafts.size():
+		if drafts[di] == null:
+			out.append("unfinished polygon %d is empty (null)" % di)
 	return out
 
 

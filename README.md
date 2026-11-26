@@ -44,11 +44,18 @@ actions plus every value of the selection; its *New sectors* and *Controls*
 sections are folded away until you open them.
 
 
-- `D` — draw a sector: click points (grid snapped; snaps to existing corners),
+- `D` — draw a polygon: click points (grid snapped; snaps to existing corners),
   click the first point or press Enter to finish, Backspace removes a point,
-  hold Shift for no grid snap, Esc cancels. For an exact side, type a length
+  hold Shift for no grid snap. For an exact side, type a length
   and press Enter: the point goes that far toward the mouse (angles snap to
   15°; Shift for any angle).
+- Stopping a polygon before it's closed (Esc, another tool, or selecting
+  another node) with two or more points keeps it as an **unfinished polygon**:
+  a red line saved with the scene. Click either end (in Select or Draw
+  Polygon) to continue drawing from there; close it as usual to make the
+  sector. Delete over a red line discards it, as does taking a continued one
+  back to a single point with Backspace and stopping. Unfinished polygons
+  build nothing in the level.
 - `B` — draw a rectangle: click a corner, then the opposite corner. For an
   exact size, type the width, Tab, the depth, Enter (or set Width/Depth in the
   dock). A typed side with the other left free follows the mouse.
@@ -102,7 +109,9 @@ sections are folded away until you open them.
   under the mouse), or press **Split Wall** with a wall selected to split it in
   the middle. Rooms sharing the wall get the corner too, so dragging it bends
   both. Delete over a corner handle removes the corner (its two walls become
-  one). Dragging a corner onto the next one merges them.
+  one); a triangle keeps its three. Pressing Delete again in the same spot
+  does nothing until the mouse moves away, so it never goes on to delete the
+  sector. Dragging a corner onto the next one merges them.
 - **Curve Wall** (select a wall; dock or toolbar **Edit** menu) — bend the
   wall into an arc of **Segments** straight pieces whose middle moves
   **Bulge**: positive outward (the room grows), negative into the room, up to
@@ -139,14 +148,14 @@ sections are folded away until you open them.
   drawn inside another copies its alignment, so they still line up.
   Normal-mapped materials stay correct (tangents follow the alignment).
   - **Fit** — one texture repeat exactly covering each selected floor or
-    ceiling (its bounding box), or each wall (its length and height; with a
-    single wall selected, just that one).
+	ceiling (its bounding box), or each wall (its length and height; with a
+	single wall selected, just that one).
   - **Alt+arrow keys** over a surface in the viewport move its texture one
-    grid step (Shift: an eighth of a step). Over a selected sector's floor or
-    ceiling, every selected one moves; over a wall, just that wall.
+	grid step (Shift: an eighth of a step). Over a selected sector's floor or
+	ceiling, every selected one moves; over a wall, just that wall.
   - **Ctrl+Shift+C** over a surface copies its alignment, **Ctrl+Shift+V**
-    over another pastes it (also **Copy / Paste Alignment** in the dock, for
-    the chosen surface of the selection).
+	over another pastes it (also **Copy / Paste Alignment** in the dock, for
+	the chosen surface of the selection).
 - Page Up / Page Down, or Alt+mouse wheel, over a floor or ceiling — raise or
   lower it one grid step (all selected sectors if the hovered one is selected).
 - `[` / `]` — smaller / larger grid. Delete — delete selected sectors.

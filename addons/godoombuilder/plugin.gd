@@ -173,7 +173,16 @@ func _make_visible(visible: bool) -> void:
 func _forward_3d_gui_input(camera: Camera3D, event: InputEvent) -> int:
 	if editor.map == null:
 		return AFTER_GUI_INPUT_PASS
-	return editor.tool.handle_input(camera, event)
+	var result := editor.tool.handle_input(camera, event)
+	# Returning STOP keeps the key from the 3D view, but Godot's own shortcuts
+	# still see it afterwards: Delete would then offer to delete the selected
+	# node (the whole map), Ctrl+C / V would copy nodes. A key the tool used
+	# is marked handled so nothing else acts on it.
+	if result == AFTER_GUI_INPUT_STOP and event is InputEventKey:
+		var screen := EditorInterface.get_editor_main_screen()
+		if screen != null and screen.get_viewport() != null:
+			screen.get_viewport().set_input_as_handled()
+	return result
 
 
 func _forward_3d_draw_over_viewport(overlay: Control) -> void:

@@ -64,6 +64,9 @@ func dispose() -> void:
 func set_map(m: DMMap) -> void:
 	if m == map:
 		return
+	# A polygon being drawn is kept with the map it was drawn on.
+	if is_instance_valid(map) and map.data != null:
+		tool.cancel_draw()
 	if is_instance_valid(map) and map.data != null and map.data.changed.is_connected(_on_map_data_changed):
 		map.data.changed.disconnect(_on_map_data_changed)
 	map = m if is_instance_valid(m) else null
@@ -97,16 +100,46 @@ func _sectors() -> Array[DMSector]:
 
 # --- Drawing and heights ---------------------------------------------------------
 
-## Adds a sector from the drawn loop.
-func commit_loop(points: PackedVector2Array) -> DMResult:
+## Adds a sector from the drawn loop. `draft` is the unfinished polygon it
+## continues (an index into map.data.drafts, or -1); it's removed in the same
+## undo step.
+func commit_loop(points: PackedVector2Array, draft := -1) -> DMResult:
 	var before := map.data.duplicate_data()
 	var result := map.data.add_loop(points, defaults)
 	if not result.ok:
 		map.data.copy_from(before)
 		notify(result.message)
 		return result
+	if draft >= 0 and draft < map.data.drafts.size():
+		map.data.drafts.remove_at(draft)
 	_commit("Draw Sector", before)
 	return result
+
+
+## Saves a polygon left unfinished so it can be continued later: as a new
+## unfinished polygon (`index` -1) or in place of the one it continued.
+func keep_draft(points: PackedVector2Array, height: float, index := -1) -> void:
+	if not has_map():
+		return
+	var d := DMDraft.make(points, height)
+	var drafts := map.data.drafts
+	if index >= 0 and index < drafts.size() and drafts[index].same_as(d):
+		return
+	var before := map.data.duplicate_data()
+	if index >= 0 and index < drafts.size():
+		drafts[index] = d
+	else:
+		drafts.append(d)
+	_commit("Keep Unfinished Polygon", before)
+	notify("Saved the unfinished polygon (red). Click either end to continue it.", Severity.INFO)
+
+
+func discard_draft(index: int) -> void:
+	if not has_map() or index < 0 or index >= map.data.drafts.size():
+		return
+	var before := map.data.duplicate_data()
+	map.data.drafts.remove_at(index)
+	_commit("Discard Unfinished Polygon", before)
 
 
 func nudge_heights(targets: Array[int], part: int, delta: float) -> void:
@@ -709,12 +742,13 @@ func remove_corner(p: Vector2) -> void:
 	var count := _sectors().size()
 	if not map.data.remove_vertex(p):
 		return
+	if _sectors().size() != count:
+		_refuse(before, "Can't remove that corner: a sector needs at least 3. Delete the sector instead.")
+		return
 	var why := map.data.validate()
 	if not why.is_empty():
 		_refuse(before, "Can't remove that corner: " + why + ".")
 		return
-	if _sectors().size() != count:
-		tool.selected.clear()
 	tool.selected_wall = null
 	_commit("Remove Corner", before)
 

@@ -2,7 +2,7 @@
 class_name DMTool
 extends RefCounted
 ## Viewport interaction for a selected sector map: select sectors, draw new
-## ones (freeform or as rectangles, with typed sizes), and raise or lower
+## ones (as polygons or rectangles, with typed sizes), and raise or lower
 ## floors and ceilings.
 
 
@@ -24,6 +24,8 @@ const COLOR_HOVER := Color(1.0, 1.0, 1.0, 0.55)
 const COLOR_DRAW := Color(0.35, 0.85, 1.0)
 const COLOR_CLOSE := Color(0.4, 1.0, 0.45)
 const COLOR_BAD := Color(1.0, 0.3, 0.25)
+## Unfinished polygons saved with the map.
+const COLOR_DRAFT := Color(1.0, 0.2, 0.2)
 
 ## Returned by _screen() and _plane_point() when there is no such point.
 const NOWHERE := Vector2(INF, INF)
@@ -109,6 +111,20 @@ var rect_field := 0
 ## Fixed rectangle size in meters per axis; negative follows the mouse.
 var rect_size := Vector2(-1.0, -1.0)
 
+## The unfinished polygon (index into map.data.drafts) being continued, or -1.
+var draft_index := -1
+## The unfinished polygon under the mouse (-1 for none), and which end of it:
+## 0 the first point, 1 the last, -1 a side (not an end).
+var draft_hover := -1
+var draft_hover_end := -1
+## The last Delete key event handled (the same press arriving twice acts once).
+var _delete_event := 0
+## Where (on screen) a corner was just removed with Delete, or NOWHERE. Until
+## the mouse moves away, Delete there removes nothing more: pressing it again
+## for a corner that's already gone mustn't delete the whole sector.
+var _removed_corner_at := Vector2(INF, INF)
+const REMOVED_CORNER_PX := 24.0
+
 ## The single wall picked by clicking it, or null. Its sector is the only
 ## selected sector.
 var selected_wall: Wall
@@ -159,21 +175,62 @@ func validate_selection() -> void:
 		selected_wall = null
 	if hover != null and hover.sector >= count:
 		hover = null
+	var drafts := map.data.drafts.size() if map != null and map.data != null else 0
+	if draft_hover >= drafts:
+		draft_hover = -1
+	if draft_index >= drafts:
+		draft_index = -1
 
 
 func begin_draw(rectangle := false) -> void:
 	if map == null:
 		return
-	_reset_draw_state()
+	_leave_draw()
 	mode = Mode.RECT if rectangle else Mode.DRAW
 	if not selected.is_empty():
 		draw_height = map.data.sectors[selected[0]].floor_height
 	_changed()
 
 
+## Stops drawing. A polygon with two or more points is kept unfinished on
+## the map (see _leave_draw).
 func cancel_draw() -> void:
-	_reset_draw_state()
+	_leave_draw()
 	mode = Mode.SELECT
+	_changed()
+
+
+## Ends the drawing in progress. A polygon with at least two points is saved
+## as unfinished, to be continued later; one continued and taken back to
+## fewer points is discarded.
+func _leave_draw() -> void:
+	if mode == Mode.DRAW and editor != null and map != null and map.data != null:
+		if points.size() >= 2:
+			editor.keep_draft(points, draw_height, draft_index)
+		elif draft_index >= 0:
+			editor.discard_draft(draft_index)
+	_reset_draw_state()
+
+
+## Continues unfinished polygon `index` from its first (end 0) or last (end 1)
+## point.
+func resume_draft(index: int, end: int) -> void:
+	if map == null or index < 0 or index >= map.data.drafts.size():
+		return
+	cancel_drag()
+	_leave_draw()
+	var d := map.data.drafts[index]
+	points = d.points.duplicate()
+	if end == 0:
+		points.reverse()
+	draw_height = d.height
+	draft_index = index
+	draft_hover = -1
+	mode = Mode.DRAW
+	selected.clear()
+	selected_wall = null
+	handle = null
+	_update_cursor()
 	_changed()
 
 
@@ -186,7 +243,7 @@ func begin_paste() -> void:
 	if map == null:
 		return
 	cancel_drag()
-	_reset_draw_state()
+	_leave_draw()
 	paste_basis = Transform2D.IDENTITY
 	mode = Mode.PASTE
 	if not selected.is_empty():
@@ -211,6 +268,7 @@ func paste_transform() -> Transform2D:
 
 func _reset_draw_state() -> void:
 	points.clear()
+	draft_index = -1
 	typed = ""
 	rect_started = false
 	rect_field = 0
@@ -247,6 +305,8 @@ func handle_input(cam: Camera3D, event: InputEvent) -> int:
 	if event is InputEventMouseMotion:
 		var motion: InputEventMouseMotion = event
 		mouse_pos = motion.position
+		if _removed_corner_at != NOWHERE and mouse_pos.distance_to(_removed_corner_at) > REMOVED_CORNER_PX:
+			_removed_corner_at = NOWHERE
 		if box_pending and (motion.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
 			if not box_active and mouse_pos.distance_to(box_start) >= BOX_START_PX:
 				box_active = true
@@ -281,6 +341,11 @@ func handle_input(cam: Camera3D, event: InputEvent) -> int:
 				_update_hover()
 				if mode == Mode.SELECT and mb.double_click and handle != null and handle.kind == Handle.Kind.EDGE:
 					_split_at_handle()
+					_consume_release = true
+					return EditorPlugin.AFTER_GUI_INPUT_STOP
+				if (mode == Mode.SELECT or (mode == Mode.DRAW and points.is_empty())) \
+						and draft_hover >= 0 and draft_hover_end >= 0 and not mb.shift_pressed:
+					resume_draft(draft_hover, draft_hover_end)
 					_consume_release = true
 					return EditorPlugin.AFTER_GUI_INPUT_STOP
 				if mode == Mode.DRAW:
@@ -443,9 +508,29 @@ func _key(k: InputEventKey) -> int:
 				editor.join_selected()
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
 		KEY_DELETE:
-			if mode == Mode.SELECT and plain and handle != null and handle.kind == Handle.Kind.VERTEX:
-				editor.remove_corner(handle.a)
+			if mode != Mode.SELECT or not plain:
+				return EditorPlugin.AFTER_GUI_INPUT_PASS
+			# One press does one thing: a held key's repeats, or the same press
+			# arriving twice, would otherwise go on to delete the sector whose
+			# corner was just removed.
+			if k.echo or k.get_instance_id() == _delete_event:
+				return EditorPlugin.AFTER_GUI_INPUT_STOP
+			_delete_event = k.get_instance_id()
+			# What's under the mouse now (a click may have changed the selection
+			# since it last moved).
+			_update_hover()
+			if draft_hover >= 0:
+				editor.discard_draft(draft_hover)
+				draft_hover = -1
 				_update_hover()
+				return EditorPlugin.AFTER_GUI_INPUT_STOP
+			if handle != null and handle.kind == Handle.Kind.VERTEX:
+				editor.remove_corner(handle.a)
+				_removed_corner_at = mouse_pos
+				_update_hover()
+				return EditorPlugin.AFTER_GUI_INPUT_STOP
+			if _removed_corner_at != NOWHERE:
+				editor.notify("No corner here any more. To delete the sector, move the mouse away and press Delete.", DMEditor.Severity.INFO)
 				return EditorPlugin.AFTER_GUI_INPUT_STOP
 			if mode == Mode.SELECT and selected_wall != null and plain:
 				editor.set_wall_hidden(true)
@@ -627,7 +712,7 @@ func _draw_click() -> void:
 
 
 func _finish() -> void:
-	var result := editor.commit_loop(points)
+	var result := editor.commit_loop(points, draft_index)
 	if result.ok:
 		_reset_draw_state()
 		mode = Mode.SELECT
@@ -730,7 +815,8 @@ func _update_hover() -> void:
 		hover = null
 		return
 	hover = map.pick(camera.project_ray_origin(mouse_pos), camera.project_ray_normal(mouse_pos))
-	handle = _find_handle() if mode == Mode.SELECT else null
+	_find_draft()
+	handle = _find_handle() if mode == Mode.SELECT and draft_hover < 0 else null
 	if is_drawing():
 		var started := rect_started if mode == Mode.RECT else not points.is_empty()
 		if not started and hover != null and hover.part == DMBuilder.Part.FLOOR:
@@ -789,6 +875,41 @@ func _plane_point(h: float, at := NOWHERE) -> Vector2:
 
 
 # --- Dragging corners and walls ------------------------------------------------
+
+## Sets draft_hover / draft_hover_end to the unfinished polygon under the
+## mouse: an end of one (to continue it), or else a side (Select only, to
+## discard it). Not while placing points, nor the one being continued.
+func _find_draft() -> void:
+	draft_hover = -1
+	draft_hover_end = -1
+	if map == null or map.data == null or camera == null:
+		return
+	if not (mode == Mode.SELECT or (mode == Mode.DRAW and points.is_empty())):
+		return
+	var drafts := map.data.drafts
+	var best := HANDLE_PX
+	for di in drafts.size():
+		var d := drafts[di]
+		if di == draft_index or d.points.is_empty():
+			continue
+		var last := d.points.size() - 1
+		for end: int in [last, 0]:
+			var dist := _screen_distance(_v3(d.points[end], d.height))
+			if dist < best:
+				best = dist
+				draft_hover = di
+				draft_hover_end = 0 if end == 0 else 1
+	if draft_hover >= 0 or mode != Mode.SELECT:
+		return
+	best = EDGE_PX
+	for di in drafts.size():
+		var d := drafts[di]
+		for i in range(1, d.points.size()):
+			var dist := _segment_distance(_v3(d.points[i - 1], d.height), _v3(d.points[i], d.height))
+			if dist < best:
+				best = dist
+				draft_hover = di
+
 
 ## The corner or wall of a selected sector under the mouse, if any.
 func _find_handle() -> Handle:
@@ -988,12 +1109,13 @@ func draw_overlay(overlay: Control) -> void:
 			_line3(overlay, _v3(outline[i], s.floor_height), _v3(outline[i + 1], s.floor_height), COLOR_SELECTED, 3.0)
 			_line3(overlay, _v3(outline[i], s.ceiling_height), _v3(outline[i + 1], s.ceiling_height), Color(COLOR_SELECTED, 0.45), 1.5)
 
+	_draw_drafts(overlay)
 	_draw_hidden_walls(overlay)
 	if selected_wall != null:
 		_draw_selected_wall(overlay)
 	if mode == Mode.SELECT:
 		_draw_handles(overlay)
-	if mode == Mode.SELECT and drag == null and handle == null and hover != null:
+	if mode == Mode.SELECT and drag == null and handle == null and draft_hover < 0 and hover != null:
 		_draw_face_outline(overlay, hover.face, COLOR_HOVER, 2.0)
 		var s := sectors[hover.sector]
 		var part := hover.part
@@ -1014,6 +1136,30 @@ func draw_overlay(overlay: Control) -> void:
 		_draw_rect(overlay)
 	elif mode == Mode.PASTE:
 		_draw_paste(overlay)
+
+
+## Unfinished polygons in red, their ends marked; the one under the mouse
+## brighter, with what clicking does.
+func _draw_drafts(overlay: Control) -> void:
+	var drafts := map.data.drafts
+	for di in drafts.size():
+		if di == draft_index and mode == Mode.DRAW:
+			continue
+		var d := drafts[di]
+		var lit := di == draft_hover
+		var color := COLOR_DRAFT.lightened(0.45) if lit else COLOR_DRAFT
+		for i in range(1, d.points.size()):
+			_line3(overlay, _v3(d.points[i - 1], d.height), _v3(d.points[i], d.height), color, 3.0 if lit else 2.5)
+		for i in d.points.size():
+			var is_end := i == 0 or i == d.points.size() - 1
+			var on_end := lit and draft_hover_end >= 0 and i == (0 if draft_hover_end == 0 else d.points.size() - 1)
+			_marker(overlay, _v3(d.points[i], d.height), Color.WHITE if on_end else color, 5.0 if is_end else 3.0)
+	if draft_hover >= 0 and drag == null:
+		var tip := "Unfinished polygon:  click to continue from here" if draft_hover_end >= 0 \
+			else "Unfinished polygon:  click an end to continue it"
+		if mode == Mode.SELECT:
+			tip += "  •  Delete discards it"
+		_label(overlay, mouse_pos + Vector2(16, -8), tip, COLOR_DRAFT.lightened(0.45))
 
 
 func _draw_paste(overlay: Control) -> void:
@@ -1133,7 +1279,7 @@ func _draw_drawing(overlay: Control) -> void:
 	if not typed.is_empty():
 		_label(overlay, mouse_pos + Vector2(16, 18), "Length: %s▏%s   Enter places the point" % [
 			typed, DMUnits.suffix(editor.units)], COLOR_DRAW)
-	var hint := "Draw sector:  click to add points  •  type a length + Enter for an exact side  •  click the first point or Enter to finish  •  Backspace undoes  •  Shift: free angle / no snap  •  Esc cancels"
+	var hint := "Draw polygon:  click to add points  •  type a length + Enter for an exact side  •  click the first point or Enter to finish  •  Backspace undoes  •  Shift: free angle / no snap  •  Esc stops (2+ points are kept, in red, to finish later)"
 	_label(overlay, Vector2(12, overlay.size.y - 14), hint, Color(1, 1, 1, 0.85))
 
 
