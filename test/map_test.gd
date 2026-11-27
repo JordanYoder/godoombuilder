@@ -763,6 +763,101 @@ func _run() -> void:
 		Vector2(3, 2), Vector2(2, 0.0), Vector2(1, 2), Vector2(2, 4), Vector2(0, 4)]))
 	check(tee.size() >= 2, "a corner touching another edge splits the loop there")
 
+	_enclosed_sectors_are_separate()
+	_selection_tint()
+
 	map.queue_free()
 	print("RESULT: %s (%d failures)" % ["OK" if fails == 0 else "FAILED", fails])
 	quit(1 if fails else 0)
+
+
+## A sector drawn inside another sits in a hole in it, and edits treat it as
+## its own room: the hole follows it, and the outer room's walls don't bend at
+## the seams its pieces are stored with.
+func _enclosed_sectors_are_separate() -> void:
+	var room_and_pillar := func() -> DMMapData:
+		var d := DMMapData.new()
+		d.add_loop(rect(0, 0, 10, 10), defaults())
+		d.add_loop(rect(4, 4, 6, 6), defaults())
+		return d
+	var d: DMMapData = room_and_pillar.call()
+	var loops := DMMapData.region_loops(d.sectors[0].polygons)
+	check(loops.size() == 2 and loops[0].size() == 4 and loops[1].size() == 4,
+		"the room's outline is its 4 walls and the pillar's 4, without seams (got %s)" % [loops])
+
+	d.transform_sectors([1], Transform2D(0.0, Vector2(2, 1)))
+	check(d.validate() == "" and near(d.sectors[0].area(), 96.0) and d.sectors[1].contains_point(Vector2(7, 6)),
+		"moving a pillar inside a room takes its hole along (%s)" % d.validate())
+	check(d.sector_at(Vector2(5, 5)) == 0 and d.sector_at(Vector2(4.5, 5)) == 0, "the space the pillar left is the room's again")
+
+	d = room_and_pillar.call()
+	d.transform_sectors([1], Transform2D(PI / 4.0, Vector2(5, 5)) * Transform2D(0.0, Vector2(-5, -5)))
+	check(d.validate() == "" and near(d.sectors[0].area(), 96.0), "rotating a pillar inside a room is allowed (%s)" % d.validate())
+
+	d = room_and_pillar.call()
+	d.move_vertices(PackedVector2Array([Vector2(10, 10)]), PackedVector2Array([Vector2(12, 12)]))
+	var room := DMMapData.region_loops(d.sectors[0].polygons)
+	var outer_points := 0
+	for loop in room:
+		if DMGeo.signed_area(loop) > 0.0:
+			outer_points = loop.size()
+	check(d.validate() == "" and outer_points == 4 and near(d.sectors[0].area(), 120.0 - 4.0),
+		"dragging the room's corner doesn't bend its wall at a seam (%d points, area %.3f)" % [outer_points, d.sectors[0].area()])
+
+	d = room_and_pillar.call()
+	d.move_vertices(PackedVector2Array([Vector2(6, 6)]), PackedVector2Array([Vector2(7, 7)]))
+	check(d.validate() == "" and near(d.sectors[0].area() + d.sectors[1].area(), 100.0), "dragging a pillar's corner reshapes its hole")
+	d = room_and_pillar.call()
+	d.move_vertices(PackedVector2Array([Vector2(6, 6)]), PackedVector2Array([Vector2(11, 6)]))
+	check(d.validate() != "", "dragging a pillar's corner out through the room's wall is still refused")
+
+	d = room_and_pillar.call()
+	d.remove_vertex(Vector2(4, 4))
+	check(d.validate() == "" and near(d.sectors[0].area(), 98.0) and near(d.sectors[1].area(), 2.0),
+		"removing a pillar's corner straightens the room's side too, leaving no gap (room %.3f)" % d.sectors[0].area())
+
+	# Nested: a platform on the pillar. Moving the platform alone only
+	# changes the pillar; moving both changes only the room.
+	d = room_and_pillar.call()
+	d.add_loop(rect(4.5, 4.5, 5.5, 5.5), defaults())
+	d.transform_sectors([2], Transform2D(0.0, Vector2(0.25, 0)))
+	check(d.validate() == "" and near(d.sectors[0].area(), 96.0) and near(d.sectors[1].area(), 3.0),
+		"moving a platform on a pillar leaves the room alone")
+	d.transform_sectors([1, 2], Transform2D(0.0, Vector2(2, 2)))
+	check(d.validate() == "" and near(d.sectors[0].area(), 96.0) and near(d.sectors[1].area(), 3.0)
+		and d.sector_at(Vector2(7.25, 7)) == 2, "moving the pillar with its platform moves the room's hole")
+
+	# A sector touching the room's wall isn't in a hole: neighbours stay put.
+	d = DMMapData.new()
+	d.add_loop(rect(0, 0, 10, 10), defaults())
+	d.add_loop(rect(0, 4, 2, 6), defaults())
+	d.transform_sectors([1], Transform2D(0.0, Vector2(3, 0)))
+	check(d.validate() != "", "a sector against the wall still can't be moved over the room")
+
+
+## The editor's selection tint covers just the chosen sectors' surfaces.
+func _selection_tint() -> void:
+	var tinted := DMMap.new()
+	get_root().add_child(tinted)
+	tinted.data.add_loop(rect(0, 0, 10, 10), defaults())
+	tinted.data.add_loop(rect(4, 4, 6, 6), defaults())
+	tinted.data.sectors[1].floor_height = 1.0
+	tinted.rebuild()
+	tinted.set_highlight(PackedInt32Array([1]), Color(1, 0.75, 0.2, 0.2))
+	var tint: MeshInstance3D = null
+	for c in tinted.get_children(true):
+		if c.name == "SelectionTint":
+			tint = c
+	var verts := 0
+	var expected := 0
+	for t in tinted.build_info.tri_face.size():
+		if tinted.build_info.face_sector[tinted.build_info.tri_face[t]] == 1:
+			expected += 3
+	if tint != null and tint.mesh != null:
+		verts = tint.mesh.surface_get_array_len(0)
+	check(tint != null and verts == expected and expected > 0, "the selection tint covers exactly the selected sector's surfaces (%d of %d points)" % [verts, expected])
+	check(tint.owner == null, "the tint isn't saved with the scene")
+	tinted.set_highlight(PackedInt32Array(), Color.TRANSPARENT)
+	check(tint.mesh == null, "an empty selection clears the tint")
+	tinted.queue_free()
+

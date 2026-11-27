@@ -24,6 +24,9 @@ height, and floor/ceiling/wall materials.
   (lower) and upper walls where neighbouring sectors' heights differ.
 - Drawing inside a sector makes a sub-sector (platform, pit, pillar) that
   starts with the same heights. Drawing across sectors cuts them.
+  A sub-sector is its own room standing in a hole in the one around it:
+  rotating or mirroring it takes the hole along, and reshaping either one
+  never bends the other's walls.
 - Deleting a sector leaves solid space (e.g. a pillar).
 - A sector can be open to the sky (untick **Has ceiling**): no ceiling is
   built, its walls still rise to its ceiling height, and there are no upper
@@ -40,8 +43,11 @@ While a Sector Map is selected, a **toolbar** above the 3D viewport has the
 tools (Select, Draw, Rectangle), the actions on the selection (Join, Simplify,
 Thicken with its thickness, Delete / Hide Wall), Floor / Ceiling toggles, and
 the grid and units. The **Sectors** panel next to the Inspector has the same
-actions plus every value of the selection; its *New sectors* and *Controls*
-sections are folded away until you open them.
+actions plus every value of the selection, grouped into sections you can
+fold: *Draw*, then for the selection *Sector* (heights, size, wall
+thickness), *Materials* and *Selected Wall*, and, folded until you open them,
+*Texture Alignment*, *Rotate, Mirror & Copy*, *Thicken Walls*, *Stairs*,
+*New Sectors in Empty Space* and *Controls*.
 
 
 - `D` — draw a polygon: click points (grid snapped; snaps to existing corners),
@@ -60,7 +66,9 @@ sections are folded away until you open them.
   exact size, type the width, Tab, the depth, Enter (or set Width/Depth in the
   dock). A typed side with the other left free follows the mouse.
 - Typed numbers are in the current units (e.g. `64` = 2 m in Doom units).
-- Click — select a sector; Shift+click adds to the selection.
+- Click — select a sector; Shift+click adds to the selection. Selected
+  sectors are outlined and their floors, ceilings and walls get a light amber
+  tint, so you can see exactly what's selected.
 - Drag from a floor (or ceiling) across rooms — box select: every sector
   whose middle is inside the box. Shift+drag adds to the selection, Esc
   cancels. (A drag that starts on empty space is still Godot's own.)
@@ -77,16 +85,23 @@ sections are folded away until you open them.
   / **Wall bottom** (e.g. a 1 m half wall) without changing the rest of the
   room, or press **Delete** (or tick **Hidden**) to remove it as an opening
   with no collision. Hidden walls of the selected sector show as dashed
-  outlines; **Show Hidden Walls** brings them back, **Reset Wall** undoes a
+  outlines; **Show Hidden Walls** brings them back, **Reset** undoes a
   wall's own settings. Settings stay with the wall when you drag its corners.
   (Walls between two sectors take their height from the neighbouring floor or
   ceiling, so they can be hidden but not resized.)
-- **Simplify Sector** (dock) — remove points that don't change the selected
+- **Wall lengths** — every wall of the selected sectors is labelled with its
+  length (and hovering a wall shows it too). To set one exactly, click the
+  wall, then type the length and press Enter (or use **Length** in the dock;
+  Esc clears what you typed). **Keep fixed** picks what stays put: end **A**,
+  end **B** (labelled in the viewport) or the **Center**. Corners shared with
+  neighbouring sectors move along, so they stretch; a length that would cross
+  or overlap is refused.
+- **Simplify** (dock) — remove points that don't change the selected
   sectors' shapes: extra points along straight walls (within 1 mm) and seams
   inside the sector. Points where a neighbouring sector's corner touches the
   wall still show as handles, since rooms meet there.
 - **Has floor** / **Has ceiling** (dock) — remove a sector's floor or ceiling.
-- `J` (or **Join Sectors** in the dock) — join the selected sectors into one,
+- `J` (or **Join** in the dock) — join the selected sectors into one,
   with the first-selected one's heights and materials. Walls between them
   disappear.
 - **Wall thickness** — walls are thin by default. Give a room (in the dock's
@@ -102,11 +117,11 @@ sections are folded away until you open them.
   reshape the block (e.g. a tapered or angled wall), or drag an **outer face**
   in or out to change that wall's thickness (dragging it all the way in makes
   it thin). Hand-placed corners follow the room's corners; setting a new
-  thickness squares them up again. **Thicken toward:
-  Inward** or **Centered** shrink the room instead (cutting its floor).
+  thickness squares them up again. **Toward:
+  Inward** or **Centered** (Thicken Walls section) shrink the room instead (cutting its floor).
 - **Add / remove corners** — double-click a selected sector's wall to add a
   corner there (on the grid if a grid point lies on the wall; Shift: exactly
-  under the mouse), or press **Split Wall** with a wall selected to split it in
+  under the mouse), or press **Split** (Selected Wall) with a wall selected to split it in
   the middle. Rooms sharing the wall get the corner too, so dragging it bends
   both. Delete over a corner handle removes the corner (its two walls become
   one); a triangle keeps its three. Pressing Delete again in the same spot
@@ -119,18 +134,19 @@ sections are folded away until you open them.
   wall move onto the arc.
 - `Ctrl+C` / `Ctrl+V` — copy the selected sectors, then place copies: the
   copy follows the mouse (grid / corner snapped), `R` / `Shift+R` turn it 90°,
-  `E` / `Shift+E` turn it by the **Rotate by** angle, `M` mirrors it, click
+  `E` / `Shift+E` turn it by the dock's rotate angle, `M` mirrors it, click
   (or Enter) places it, Esc cancels. Like drawing, it
   cuts what's under it. Heights, materials, wall settings and texture
   alignment come along.
 - **Rotate 90°** / **Mirror X** / **Mirror Z** (dock or **Edit** menu) — turn
   or flip the selected sectors about the grid point nearest their center.
-  **Rotate by Angle** turns them by any angle (the dock's angle field;
-  positive is clockwise seen from above). Neighbours stay put, so a move that
-  would overlap one is refused.
-- **Prefabs** — **Save as Prefab…** (dock or **Edit** menu) saves the
+  **Rotate** next to the angle field turns them by any angle (positive is
+  clockwise seen from above). Neighbours stay put, so a move that would
+  overlap one is refused; a sector standing inside another takes its hole
+  along.
+- **Prefabs** — **Save Prefab…** (dock) or **Save as Prefab…** (**Edit** menu) saves the
   selected sectors, with their heights, materials, wall settings and texture
-  alignment, as a `.tres` resource. **Paste Prefab…** loads one into this or
+  alignment, as a `.tres` resource. **Prefab…** (under Draw) loads one into this or
   any other map and places it like a paste (R / E / M work). A prefab is a
   plain `DMMapData` resource, so any saved map data works too.
 - **Stairs** (dock, folded; or **Edit** menu) — **Make Stairs**: Shift+click

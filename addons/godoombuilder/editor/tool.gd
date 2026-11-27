@@ -20,6 +20,8 @@ const HANDLE_PX := 9.0
 const EDGE_PX := 6.0
 
 const COLOR_SELECTED := Color(1.0, 0.75, 0.2)
+## How strongly the selected sectors' surfaces are tinted (0 = not at all).
+const SELECTION_TINT := 0.18
 const COLOR_HOVER := Color(1.0, 1.0, 1.0, 0.55)
 const COLOR_DRAW := Color(0.35, 0.85, 1.0)
 const COLOR_CLOSE := Color(0.4, 1.0, 0.45)
@@ -161,6 +163,9 @@ func set_map(m: DMMap) -> void:
 	selected_wall = null
 	hover = null
 	handle = null
+	# The selection tint goes with the selection.
+	if is_instance_valid(map):
+		map.set_highlight(PackedInt32Array(), Color.TRANSPARENT)
 	map = m
 
 
@@ -173,6 +178,8 @@ func validate_selection() -> void:
 	selected = keep
 	if selected_wall != null and (selected.size() != 1 or selected[0] != selected_wall.sector):
 		selected_wall = null
+	if selected_wall == null and mode == Mode.SELECT:
+		typed = ""
 	if hover != null and hover.sector >= count:
 		hover = null
 	var drafts := map.data.drafts.size() if map != null and map.data != null else 0
@@ -438,6 +445,31 @@ func _key(k: InputEventKey) -> int:
 		return EditorPlugin.AFTER_GUI_INPUT_STOP
 	if mode == Mode.PASTE:
 		return _paste_key(k, plain)
+	# Typing a length for the selected wall (not on the keypad: Godot's view
+	# shortcuts are there).
+	if mode == Mode.SELECT and selected_wall != null and drag == null and plain and k.unicode > 0 			and TYPED_CHARS.contains(char(k.unicode)) and not (k.keycode >= KEY_KP_MULTIPLY and k.keycode <= KEY_KP_9):
+		var ch := char(k.unicode)
+		if not (ch == "." and typed.contains(".")):
+			typed += ch
+		_changed()
+		return EditorPlugin.AFTER_GUI_INPUT_STOP
+	if mode == Mode.SELECT and not typed.is_empty() and plain:
+		match k.keycode:
+			KEY_ENTER, KEY_KP_ENTER:
+				var v := typed_meters()
+				typed = ""
+				if v > 0.0:
+					editor.set_wall_length(v)
+				_changed()
+				return EditorPlugin.AFTER_GUI_INPUT_STOP
+			KEY_BACKSPACE:
+				typed = typed.left(-1)
+				_changed()
+				return EditorPlugin.AFTER_GUI_INPUT_STOP
+			KEY_ESCAPE:
+				typed = ""
+				_changed()
+				return EditorPlugin.AFTER_GUI_INPUT_STOP
 	# Typing a size while drawing.
 	if is_drawing() and plain and k.unicode > 0 and TYPED_CHARS.contains(char(k.unicode)):
 		var ch := char(k.unicode)
@@ -605,6 +637,7 @@ func _select_click(additive: bool) -> int:
 		return EditorPlugin.AFTER_GUI_INPUT_PASS
 	var s := hover.sector
 	selected_wall = null
+	typed = ""
 	if additive:
 		if selected.has(s):
 			selected.erase(s)
@@ -1086,6 +1119,15 @@ func cancel_drag() -> void:
 	_changed()
 
 
+## Tints the selected sectors in the viewport (see DMMap.set_highlight).
+func update_highlight() -> void:
+	if map == null or map.data == null:
+		return
+	map.ensure_built()
+	validate_selection()
+	map.set_highlight(PackedInt32Array(selected), Color(COLOR_SELECTED, SELECTION_TINT))
+
+
 func _changed() -> void:
 	if editor != null:
 		editor.on_tool_changed()
@@ -1098,6 +1140,7 @@ func draw_overlay(overlay: Control) -> void:
 		return
 	map.ensure_built()
 	validate_selection()
+	update_highlight()
 	var info := map.build_info
 	var sectors := map.data.sectors
 
@@ -1108,6 +1151,8 @@ func draw_overlay(overlay: Control) -> void:
 		for i in range(0, outline.size(), 2):
 			_line3(overlay, _v3(outline[i], s.floor_height), _v3(outline[i + 1], s.floor_height), COLOR_SELECTED, 3.0)
 			_line3(overlay, _v3(outline[i], s.ceiling_height), _v3(outline[i + 1], s.ceiling_height), Color(COLOR_SELECTED, 0.45), 1.5)
+	if drag == null or drag.handle.kind == Handle.Kind.VERTEX:
+		_draw_wall_lengths(overlay)
 
 	_draw_drafts(overlay)
 	_draw_hidden_walls(overlay)
@@ -1120,6 +1165,9 @@ func draw_overlay(overlay: Control) -> void:
 		var s := sectors[hover.sector]
 		var part := hover.part
 		var text := "Wall"
+		if part == DMBuilder.Part.WALL:
+			var edge := map.build_info.edge_of(hover.face)
+			text = "Wall  " + DMUnits.format(edge[0].distance_to(edge[1]), editor.units)
 		if part == DMBuilder.Part.FLOOR:
 			text = "Floor  " + DMUnits.format(s.floor_height, editor.units)
 		elif part == DMBuilder.Part.CEILING:
@@ -1192,6 +1240,24 @@ func selected_wall_faces() -> Array[int]:
 func _draw_selected_wall(overlay: Control) -> void:
 	for f in selected_wall_faces():
 		_draw_face_outline(overlay, f, Color.WHITE, 3.0)
+	# Its ends, A and B (Keep fixed in the dock picks which stays put when
+	# setting its length), the fixed one highlighted.
+	var w := selected_wall
+	var h := map.data.sectors[w.sector].floor_height
+	var anchor := editor.length_anchor
+	var ends: Array[Vector2] = [w.a, w.b]
+	for i in 2:
+		var fixed := anchor == (DMEditor.LengthAnchor.KEEP_A if i == 0 else DMEditor.LengthAnchor.KEEP_B)
+		var sp := _screen(_v3(ends[i], h))
+		if sp != NOWHERE:
+			overlay.draw_circle(sp, 6.5, Color(0, 0, 0, 0.6))
+			overlay.draw_circle(sp, 5.0, COLOR_SELECTED if fixed else Color.WHITE)
+			_label(overlay, sp + Vector2(8, 16), "AB"[i] + (" (fixed)" if fixed else ""), COLOR_SELECTED if fixed else Color.WHITE)
+	if anchor == DMEditor.LengthAnchor.CENTER:
+		_marker(overlay, _v3((w.a + w.b) * 0.5, h), COLOR_SELECTED, 3.5)
+	if not typed.is_empty() and mode == Mode.SELECT:
+		_label(overlay, mouse_pos + Vector2(16, 18), "Wall length: %s▏%s   Enter sets it  •  Esc cancels" % [
+			typed, DMUnits.suffix(editor.units)], COLOR_DRAW)
 	var s := map.data.sectors[selected_wall.sector]
 	var o := s.wall_override(selected_wall.a, selected_wall.b)
 	if DMSector.setting_bool(o, "hidden"):
@@ -1320,6 +1386,37 @@ func _draw_face_outline(overlay: Control, f: int, color: Color, width: float) ->
 	var pts := faces[f]
 	for i in pts.size():
 		_line3(overlay, pts[i], pts[(i + 1) % pts.size()], color, width)
+
+
+## Every wall of the selected sectors labelled with its length, at the
+## floor. Walls shared by two selected sectors get one label; walls too short
+## on screen to fit one get none.
+func _draw_wall_lengths(overlay: Control) -> void:
+	var done := {}
+	var font := overlay.get_theme_font("font", "Label")
+	var size := overlay.get_theme_font_size("font_size", "Label")
+	for si in selected:
+		var outline := map.build_info.outline(si)
+		var h := map.data.sectors[si].floor_height
+		for i in range(0, outline.size(), 2):
+			var a := outline[i]
+			var b := outline[i + 1]
+			var ka := DMMapData.key_of(a)
+			var kb := DMMapData.key_of(b)
+			var key := [ka, kb] if ka < kb else [kb, ka]
+			if done.has(key):
+				continue
+			done[key] = true
+			var sa := _screen(_v3(a, h))
+			var sb := _screen(_v3(b, h))
+			if sa == NOWHERE or sb == NOWHERE:
+				continue
+			var text := DMUnits.format(a.distance_to(b), editor.units)
+			var text_size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size)
+			if sa.distance_to(sb) < text_size.x + 16.0:
+				continue
+			var mid := (sa + sb) * 0.5
+			_label(overlay, mid + Vector2(-text_size.x * 0.5, -4.0), text, COLOR_SELECTED.lightened(0.5))
 
 
 func _length_label(overlay: Control, a: Vector2, b: Vector2, h: float) -> void:

@@ -25,6 +25,10 @@ var defaults := DMSector.new()
 ## Which point stays put when resizing: 0 center, then corners
 ## (-X -Z), (+X -Z), (-X +Z), (+X +Z).
 var resize_anchor := 0
+## Which point of the selected wall stays put when setting its length: its
+## middle, or its A or B end (labelled in the viewport).
+enum LengthAnchor { CENTER, KEEP_A, KEEP_B }
+var length_anchor := LengthAnchor.KEEP_A
 ## Wall thickness settings used by thicken_selected (meters; -1 inside,
 ## 0 centered, 1 outside).
 var wall_thickness := 0.25
@@ -82,12 +86,14 @@ func _on_map_data_changed() -> void:
 	tool.validate_selection()
 	_refresh_ui()
 	update_overlays()
+	tool.update_highlight()
 
 
 ## Called by the tool whenever its state changes.
 func on_tool_changed() -> void:
 	_refresh_ui()
 	update_overlays()
+	tool.update_highlight()
 
 
 func has_map() -> bool:
@@ -338,6 +344,49 @@ func set_wall_height(top: bool, meters: float) -> void:
 	var before := map.data.duplicate_data()
 	s.set_wall_override(tool.selected_wall.a, tool.selected_wall.b, {("top" if top else "bottom"): meters})
 	_commit("Set Wall Height", before, true)
+
+
+## Sets the selected wall's length (meters) by moving its corners along the
+## wall: which point stays put is `length_anchor`. Shared corners move too,
+## so neighbouring rooms stretch along. The wall stays selected.
+func set_wall_length(meters: float) -> void:
+	var s := _wall_sector()
+	if s == null or meters <= 0.0:
+		return
+	var w := tool.selected_wall
+	var old := w.a.distance_to(w.b)
+	if old < DMGeo.LINE_EPS or absf(old - meters) < DMGeo.SNAP:
+		return
+	var dir := (w.b - w.a) / old
+	var new_a := w.a
+	var new_b := w.b
+	match length_anchor:
+		LengthAnchor.CENTER:
+			var mid := (w.a + w.b) * 0.5
+			new_a = mid - dir * meters * 0.5
+			new_b = mid + dir * meters * 0.5
+		LengthAnchor.KEEP_A:
+			new_b = w.a + dir * meters
+		LengthAnchor.KEEP_B:
+			new_a = w.b - dir * meters
+	var from := PackedVector2Array()
+	var to := PackedVector2Array()
+	if not new_a.is_equal_approx(w.a):
+		from.append(w.a)
+		to.append(new_a)
+	if not new_b.is_equal_approx(w.b):
+		from.append(w.b)
+		to.append(new_b)
+	var before := map.data.duplicate_data()
+	map.data.move_vertices(from, to, false)
+	var why := map.data.validate()
+	if not why.is_empty():
+		_refuse(before, "Can't make the wall that long: " + why + ".")
+		return
+	# move_vertices snaps to DMGeo.SNAP: select the wall where it ended up.
+	w.a = Vector2(snappedf(new_a.x, DMGeo.SNAP), snappedf(new_a.y, DMGeo.SNAP))
+	w.b = Vector2(snappedf(new_b.x, DMGeo.SNAP), snappedf(new_b.y, DMGeo.SNAP))
+	_commit("Set Wall Length", before, true)
 
 
 ## Back to the sector's heights, thickness and texture, and shown.
@@ -871,6 +920,7 @@ func load_settings() -> void:
 	stair_count = _setting_int("stair_count", 4)
 	stair_direction = _setting_int("stair_direction", 0)
 	rotate_angle = _setting_float("rotate_angle", 45.0)
+	length_anchor = clampi(_setting_int("length_anchor", LengthAnchor.KEEP_A), 0, 2) as LengthAnchor
 	defaults.floor_material = _load_material(_setting_string("default_floor_mat"))
 	defaults.ceiling_material = _load_material(_setting_string("default_ceiling_mat"))
 	defaults.wall_material = _load_material(_setting_string("default_wall_mat"))
@@ -923,6 +973,7 @@ func save_settings() -> void:
 	_set_setting("stair_count", stair_count)
 	_set_setting("stair_direction", stair_direction)
 	_set_setting("rotate_angle", rotate_angle)
+	_set_setting("length_anchor", length_anchor)
 	_set_setting("default_floor_mat", _material_path(defaults.floor_material))
 	_set_setting("default_ceiling_mat", _material_path(defaults.ceiling_material))
 	_set_setting("default_wall_mat", _material_path(defaults.wall_material))

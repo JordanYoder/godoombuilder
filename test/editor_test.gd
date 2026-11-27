@@ -95,6 +95,7 @@ func _run() -> void:
 	_nudge_and_copy_texture()
 	_select_similar()
 	_prefabs()
+	_wall_length()
 	print("RESULT: %s (%d failures)" % ["OK" if fails == 0 else "FAILED", fails])
 	quit(1 if fails else 0)
 
@@ -292,3 +293,39 @@ func _prefabs() -> void:
 	check(ed3.map.data.drafts.is_empty(), "discard_draft removes it")
 	done(ed3)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(draft_path))
+
+
+func _wall_length() -> void:
+	# Two rooms side by side, sharing the corner (4, 0).
+	var ed := make_editor([rect(0, 0, 4, 4), rect(4, 0, 8, 4)])
+	var s := ed.map.data.sectors[0]
+	var w := edge_where(s, 1, 0.0)
+	ed.tool.selected.assign([0])
+	ed.tool.selected_wall = w
+	var far := w.b if w.b.x > w.a.x else w.a
+	ed.length_anchor = DMEditor.LengthAnchor.KEEP_A if far == w.b else DMEditor.LengthAnchor.KEEP_B
+	ed.set_wall_length(6.0)
+	var sw := ed.tool.selected_wall
+	check(ed.commits.back() == "Set Wall Length" and sw != null and absf(sw.a.distance_to(sw.b) - 6.0) < 0.001
+		and ed.map.data.validate() == "", "Set Wall Length makes the wall 6 m long and keeps it selected")
+	check(absf(s.area() - 20.0) < 0.001 and absf(ed.map.data.sectors[1].area() - 12.0) < 0.001,
+		"the shared corner moves, so the neighbour shrinks with no gap")
+	check(near_v(sw.a, Vector2(0, 0)) or near_v(sw.b, Vector2(0, 0)), "the fixed end stays put")
+	var count := ed.commits.size()
+	ed.set_wall_length(9.0)
+	check(ed.commits.size() == count and ed.notes.back().begins_with("Can't make the wall that long")
+		and absf(ed.map.data.sectors[0].area() - 20.0) < 0.001, "a length that would cross the neighbour is refused and undone")
+	ed.set_wall_length(6.0)
+	check(ed.commits.size() == count, "setting the same length does nothing")
+	done(ed)
+
+	ed = make_editor([rect(0, 0, 4, 4)])
+	s = ed.map.data.sectors[0]
+	ed.tool.selected.assign([0])
+	ed.tool.selected_wall = edge_where(s, 1, 0.0)
+	ed.length_anchor = DMEditor.LengthAnchor.CENTER
+	ed.set_wall_length(2.0)
+	sw = ed.tool.selected_wall
+	check(near_v((sw.a + sw.b) * 0.5, Vector2(2, 0)) and absf(sw.a.distance_to(sw.b) - 2.0) < 0.001
+		and absf(s.area() - 12.0) < 0.001, "with Center fixed, both ends move in")
+	done(ed)

@@ -54,6 +54,11 @@ var _body: StaticBody3D
 var _shape: CollisionShape3D
 var _dirty := true
 var _collision_dirty := false
+## Editor selection tint (see set_highlight).
+var _highlight_node: MeshInstance3D
+var _highlight_sectors := PackedInt32Array()
+var _highlight_color := Color.TRANSPARENT
+var _highlight_info: DMBuildInfo
 
 
 func _ready() -> void:
@@ -106,6 +111,59 @@ func _update_collision() -> void:
 	var shape := ConcavePolygonShape3D.new()
 	shape.set_faces(tris)
 	_shape.shape = shape
+
+
+## Tints the surfaces of the given sectors with `color` (its alpha is how
+## strong the tint is), e.g. to show the editor's selection. Empty clears it.
+## Cheap to call every frame: it only rebuilds when something changed.
+func set_highlight(sectors: PackedInt32Array, color: Color) -> void:
+	if sectors == _highlight_sectors and color == _highlight_color and _highlight_info == build_info:
+		return
+	_highlight_sectors = sectors
+	_highlight_color = color
+	_highlight_info = build_info
+	if sectors.is_empty() or build_info == null or build_info.tris.is_empty():
+		if is_instance_valid(_highlight_node):
+			_highlight_node.mesh = null
+		return
+	if not is_instance_valid(_highlight_node):
+		_highlight_node = MeshInstance3D.new()
+		_highlight_node.name = "SelectionTint"
+		_highlight_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_highlight_node.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		add_child(_highlight_node, false, Node.INTERNAL_MODE_BACK)
+	var picked := {}
+	for si in sectors:
+		picked[si] = true
+	var info := build_info
+	var verts := PackedVector3Array()
+	# Lifted a few millimetres off each surface so the tint isn't hidden by
+	# the surface it lies on.
+	for t in info.tri_face.size():
+		var f := info.tri_face[t]
+		if not picked.has(info.face_sector[f]):
+			continue
+		var lift := info.face_normal[f] * 0.004
+		for k in 3:
+			verts.append(info.tris[t * 3 + k] + lift)
+	if verts.is_empty():
+		_highlight_node.mesh = null
+		return
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = color
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
+	mat.disable_receive_shadows = true
+	mat.disable_fog = true
+	mat.render_priority = 1
+	mesh.surface_set_material(0, mat)
+	_highlight_node.mesh = mesh
 
 
 ## The generated mesh node (internal: not saved with the scene).

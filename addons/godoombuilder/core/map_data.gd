@@ -294,6 +294,19 @@ func move_vertices(from: PackedVector2Array, to: PackedVector2Array, emit := tru
 				if moves.has(k):
 					o[end] = moves[k]
 	for s in sectors:
+		# A sector with something inside it (a hole) moves as its outline,
+		# then is cut into pieces again: the seams between its pieces are only
+		# storage, so their points mustn't bend its walls or follow the hole.
+		if s.polygons.size() > 1 and _moves_touch(s.polygons, moves):
+			var loops := region_loops(s.polygons)
+			if _has_hole(loops):
+				var moved: Array[PackedVector2Array] = []
+				for loop in loops:
+					moved.append(_moved_points(loop, moves))
+				var pieces := pieces_of(moved)
+				if not pieces.is_empty():
+					s.polygons = pieces
+					continue
 		for pi in s.polygons.size():
 			var poly := s.polygons[pi]
 			var changed := false
@@ -306,6 +319,195 @@ func move_vertices(from: PackedVector2Array, to: PackedVector2Array, emit := tru
 				s.polygons[pi] = DMGeo.clean(poly)
 	if emit:
 		emit_changed()
+
+
+static func _moves_touch(polys: Array[PackedVector2Array], moves: Dictionary) -> bool:
+	for p in polys:
+		for v in p:
+			if moves.has(key_of(v)):
+				return true
+	return false
+
+
+static func _moved_points(p: PackedVector2Array, moves: Dictionary) -> PackedVector2Array:
+	var out := p.duplicate()
+	for i in out.size():
+		var k := key_of(out[i])
+		if moves.has(k):
+			out[i] = moves[k]
+	return out
+
+
+static func _has_hole(loops: Array[PackedVector2Array]) -> bool:
+	for loop in loops:
+		if DMGeo.signed_area(loop) < 0.0:
+			return true
+	return false
+
+
+# --- Outlines and holes ----------------------------------------------------------
+
+## A sector's real outline from its pieces: counter-clockwise outer loops and
+## clockwise holes (where other sectors sit inside it), without the seams
+## between its own pieces. Points that were only there for a seam are left out.
+static func region_loops(polys: Array[PackedVector2Array]) -> Array[PackedVector2Array]:
+	var corners := {}
+	for p in polys:
+		for v in p:
+			corners[key_of(v)] = v
+	# Every piece edge, split where another piece's corner lies on it, as
+	# directed sub-edges between corner keys.
+	var count := {}
+	var ends := {}
+	for p in polys:
+		var n := p.size()
+		for i in n:
+			var a := p[i]
+			var b := p[(i + 1) % n]
+			var ab := b - a
+			var len_sq := ab.length_squared()
+			if len_sq < 1e-12:
+				continue
+			var lo := a.min(b) - Vector2.ONE * DMGeo.LINE_EPS
+			var hi := a.max(b) + Vector2.ONE * DMGeo.LINE_EPS
+			# Corners on this edge, as fractions along it, with their points.
+			var stops := {}
+			for k: Vector2i in corners:
+				var v: Vector2 = corners[k]
+				if v.x < lo.x or v.y < lo.y or v.x > hi.x or v.y > hi.y:
+					continue
+				var t := (v - a).dot(ab) / len_sq
+				if t <= 0.0 or t >= 1.0:
+					continue
+				if Geometry2D.get_closest_point_to_segment(v, a, b).distance_to(v) < DMGeo.LINE_EPS:
+					stops[t] = v
+			var ts: Array = stops.keys()
+			ts.sort()
+			var chain: Array[Vector2] = [a]
+			for t: float in ts:
+				var v: Vector2 = stops[t]
+				chain.append(v)
+			chain.append(b)
+			for j in chain.size() - 1:
+				var ka := key_of(chain[j])
+				var kb := key_of(chain[j + 1])
+				if ka == kb:
+					continue
+				var e := Vector4i(ka.x, ka.y, kb.x, kb.y)
+				var seen: int = count.get(e, 0)
+				count[e] = seen + 1
+	# Sub-edges matched by one running the other way are seams.
+	var seam_points := {}
+	var next := {}
+	for e: Vector4i in count:
+		var r := Vector4i(e.z, e.w, e.x, e.y)
+		var here: int = count[e]
+		var back: int = count.get(r, 0)
+		var left := here - mini(here, back)
+		var ka := Vector2i(e.x, e.y)
+		var kb := Vector2i(e.z, e.w)
+		if left < here:
+			seam_points[ka] = true
+			seam_points[kb] = true
+		if left > 0 and not next.has(ka):
+			next[ka] = []
+		for i in left:
+			var list: Array = next[ka]
+			list.append(kb)
+	# Chain the boundary into loops; loops touching themselves are split.
+	var out: Array[PackedVector2Array] = []
+	while not next.is_empty():
+		var start: Vector2i = next.keys()[0]
+		var k := start
+		var loop := PackedVector2Array()
+		var guard := 1000000
+		while next.has(k) and guard > 0:
+			guard -= 1
+			var list: Array = next[k]
+			var to: Vector2i = list.pop_back()
+			if list.is_empty():
+				next.erase(k)
+			var at: Vector2 = corners.get(k, Vector2(k) * DMGeo.SNAP)
+			loop.append(at)
+			k = to
+			if k == start:
+				break
+		for lobe in DMGeo.split_pinches(loop):
+			var clean := _drop_seam_points(lobe, seam_points)
+			if clean.size() >= 3 and absf(DMGeo.signed_area(clean)) >= DMGeo.MIN_AREA:
+				out.append(clean)
+	return out
+
+
+## Drops points of a loop that lie on a straight line and were only there for
+## a seam (the loop's own corners stay, even on a straight wall).
+static func _drop_seam_points(p: PackedVector2Array, seam_points: Dictionary) -> PackedVector2Array:
+	var pts := p.duplicate()
+	var changed := true
+	while changed and pts.size() > 3:
+		changed = false
+		var n := pts.size()
+		for i in n:
+			if not seam_points.has(key_of(pts[i])):
+				continue
+			var a := pts[(i - 1 + n) % n]
+			var b := pts[i]
+			var c := pts[(i + 1) % n]
+			var ac := c - a
+			if ac.length_squared() < 1e-12:
+				continue
+			var t := (b - a).dot(ac) / ac.length_squared()
+			if t <= 0.0 or t >= 1.0:
+				continue
+			if Geometry2D.get_closest_point_to_segment(b, a, c).distance_to(b) > DMGeo.SNAP:
+				continue
+			pts.remove_at(i)
+			changed = true
+			break
+	return pts
+
+
+## Hole-free counter-clockwise pieces covering the area of `loops` (outer
+## loops counter-clockwise, holes clockwise, as region_loops() gives them).
+## Empty when the loops don't make a valid area: a loop crosses itself, a hole
+## sticks out of its outer loop, or holes overlap.
+static func pieces_of(loops: Array[PackedVector2Array]) -> Array[PackedVector2Array]:
+	var none: Array[PackedVector2Array] = []
+	var outers: Array[PackedVector2Array] = []
+	var holes: Array[PackedVector2Array] = []
+	var expected := 0.0
+	for loop in loops:
+		var c := DMGeo.clean(loop)
+		if c.size() < 3 or not DMGeo.is_simple(c):
+			return none
+		var a := DMGeo.signed_area(c)
+		expected += a
+		if a > 0.0:
+			outers.append(c)
+		else:
+			c.reverse()
+			holes.append(c)
+	var out: Array[PackedVector2Array] = []
+	for o in outers:
+		var pieces: Array[PackedVector2Array] = [o]
+		var box := _box(o)
+		for h in holes:
+			if not box.grow(DMGeo.LINE_EPS).encloses(_box(h)) or not DMGeo.point_in_polygon(DMGeo.interior_point(h), o):
+				continue
+			var next: Array[PackedVector2Array] = []
+			for p in pieces:
+				if _box(p).intersects(_box(h)):
+					next.append_array(DMGeo.subtract(p, h))
+				else:
+					next.append(p)
+			pieces = next
+		out.append_array(pieces)
+	var total := 0.0
+	for p in out:
+		total += absf(DMGeo.signed_area(p))
+	if out.is_empty() or absf(total - expected) > maxf(DMGeo.MIN_AREA * 10.0, absf(expected) * 1e-5):
+		return none
+	return out
 
 
 ## Why the map is invalid ("" when it's fine): collapsed, inside-out, crossing
@@ -813,13 +1015,82 @@ func transform_sectors(indices: Array[int], xf: Transform2D) -> void:
 	var list: Array[DMSector] = []
 	for i in indices:
 		list.append(sectors[i])
+	var hosts := _hosts_of(indices)
 	var moved := transformed_sectors(list, xf)
+	# Each sector that stood inside another (in a hole in it) takes its hole
+	# along: the space it left goes back to that sector, and its new place is
+	# cut out of it.
+	for host: int in hosts:
+		var inside: Array[int] = []
+		var listed: Array = hosts[host]
+		inside.assign(listed)
+		var area: Array[PackedVector2Array] = sectors[host].polygons.duplicate()
+		for i in inside:
+			area.append_array(sectors[i].polygons)
+		var pieces := pieces_of(region_loops(area))
+		if pieces.is_empty():
+			continue
+		for i in inside:
+			for cutter in moved[indices.find(i)].polygons:
+				var next: Array[PackedVector2Array] = []
+				for p in pieces:
+					if _box(p).intersects(_box(cutter)):
+						next.append_array(DMGeo.subtract(p, cutter))
+					else:
+						next.append(p)
+				pieces = next
+		if not pieces.is_empty():
+			sectors[host].polygons = pieces
 	for k in indices.size():
 		var target := sectors[indices[k]]
 		target.polygons = moved[k].polygons
 		target.wall_overrides = moved[k].wall_overrides
 		target.outer_corners = moved[k].outer_corners
 	emit_changed()
+
+
+## For sectors standing inside holes of other sectors: {host index: [indices
+## of the given sectors in its holes]}. Only unselected sectors are hosts, and
+## each sector goes to the smallest hole around it (the one it's directly in).
+func _hosts_of(indices: Array[int]) -> Dictionary:
+	var out := {}
+	var best_area := {}
+	var best_host := {}
+	for h in sectors.size():
+		if indices.has(h) or sectors[h].polygons.size() < 2:
+			continue
+		for loop in region_loops(sectors[h].polygons):
+			var hole_area := -DMGeo.signed_area(loop)
+			if hole_area <= 0.0:
+				continue
+			var hole := loop.duplicate()
+			hole.reverse()
+			var hole_box := _box(hole).grow(DMGeo.LINE_EPS)
+			for i in indices:
+				var best: float = best_area.get(i, INF)
+				if best <= hole_area:
+					continue
+				var s := sectors[i]
+				var inside := true
+				for p in s.polygons:
+					if not hole_box.encloses(_box(p)):
+						inside = false
+						break
+				if inside:
+					var overlap := 0.0
+					for p in s.polygons:
+						overlap += DMGeo.overlap_area(p, hole)
+					inside = absf(overlap - s.area()) < maxf(DMGeo.MIN_AREA, s.area() * 1e-5)
+				if inside:
+					best_area[i] = hole_area
+					best_host[i] = h
+	for i: int in best_host:
+		var h: int = best_host[i]
+		if not out.has(h):
+			out[h] = []
+		var list: Array = out[h]
+		list.append(i)
+	return out
 
 
 ## Pastes copies of `list` moved by `xf`. Like drawing, the pasted area is
@@ -868,8 +1139,32 @@ func remove_vertex(p: Vector2) -> bool:
 	var k := key_of(p)
 	var found := false
 	var keep: Array[DMSector] = []
+	var one := {k: true}
 	for s in sectors:
 		var polys: Array[PackedVector2Array] = []
+		# A sector with a hole: take the corner out of its outline (not its
+		# seams), so its walls straighten with its neighbour's.
+		if s.polygons.size() > 1 and _moves_touch(s.polygons, one):
+			var loops := region_loops(s.polygons)
+			if _has_hole(loops):
+				var cut: Array[PackedVector2Array] = []
+				var had := false
+				for loop in loops:
+					var q := PackedVector2Array()
+					for v in loop:
+						if key_of(v) == k:
+							had = true
+						else:
+							q.append(v)
+					if q.size() >= 3:
+						cut.append(q)
+				var pieces := pieces_of(cut) if had else cut
+				if had and not pieces.is_empty():
+					found = true
+					s.polygons = pieces
+					s.outer_corners.erase(k)
+					keep.append(s)
+					continue
 		for poly in s.polygons:
 			var q := PackedVector2Array()
 			for v in poly:

@@ -363,6 +363,21 @@ func _run() -> void:
 		check(tool.selected_wall_faces().size() > 0, "the selected wall's faces are found for highlighting")
 	key(KEY_DELETE)
 	check(plugin.hides == 1, "Delete with a wall selected hides the wall instead of deleting the sector")
+	# Typing a number with a wall selected sets its length.
+	type_text("9")
+	key(KEY_ESCAPE)
+	check(tool.typed.is_empty() and tool.selected_wall != null, "Esc clears a typed wall length but keeps the wall selected")
+	var kp := InputEventKey.new()
+	kp.keycode = KEY_KP_7
+	kp.unicode = "7".unicode_at(0)
+	kp.pressed = true
+	tool.handle_input(cam, kp)
+	check(tool.typed.is_empty(), "keypad digits are left to Godot's view shortcuts")
+	type_text("2")
+	key(KEY_ENTER)
+	var sw := tool.selected_wall
+	check(sw != null and absf(sw.a.distance_to(sw.b) - 2.0) < 0.001 and plugin.commits.back() == "Set Wall Length"
+		and map2.data.validate() == "", "typing 2 + Enter makes the selected wall 2 m long, and it stays selected")
 	click(cam.unproject_position(Vector3(102, 0, 1)))
 	check(tool.selected_wall == null and tool.selected.size() == 1, "clicking a floor selects the sector, not a wall")
 
