@@ -816,6 +816,21 @@ func _enclosed_sectors_are_separate() -> void:
 	check(d.validate() == "" and near(d.sectors[0].area(), 98.0) and near(d.sectors[1].area(), 2.0),
 		"removing a pillar's corner straightens the room's side too, leaving no gap (room %.3f)" % d.sectors[0].area())
 
+	# The room's hidden seams don't split walls: the pillar's and the room's
+	# outlines have only their real corners (no extra handles or lengths).
+	d = room_and_pillar.call()
+	d.add_loop(rect(1, 1, 2, 2), defaults())
+	var built := DMBuilder.build(d)
+	var room_points := {}
+	for q in built.outline(0):
+		room_points[DMMapData.key_of(q)] = true
+	check(built.outline(1).size() == 8 and built.outline(2).size() == 8 and room_points.size() == 12,
+		"walls around sectors inside a room have only real corners (%d, %d segments; room %d points)" % [
+			built.outline(1).size() / 2, built.outline(2).size() / 2, room_points.size()])
+	d.sectors[1].set_wall_override(Vector2(4, 4), Vector2(5, 4), {"hidden": true})
+	built = DMBuilder.build(d)
+	check(built.outline(1).size() == 10, "a setting on part of a wall still splits it there (%d segments)" % [built.outline(1).size() / 2])
+
 	# Nested: a platform on the pillar. Moving the platform alone only
 	# changes the pillar; moving both changes only the room.
 	d = room_and_pillar.call()

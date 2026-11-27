@@ -100,6 +100,14 @@ thickness), *Materials* and *Selected Wall*, and, folded until you open them,
   sectors' shapes: extra points along straight walls (within 1 mm) and seams
   inside the sector. Points where a neighbouring sector's corner touches the
   wall still show as handles, since rooms meet there.
+- **Drag and drop materials and textures** — drag a material (`.tres`,
+  `.material`) or a texture (`.png`, `.jpg`, …) from the FileSystem dock, or
+  a material from the Inspector, onto a floor, ceiling or wall in the 3D view.
+  It goes on that sector's floor, ceiling or walls (on every selected sector
+  when you drop it on a selected one) and the map is selected if it wasn't.
+  A texture gets a plain material showing it, which is reused when you drop
+  the same texture elsewhere in the map. One undo step; anything else you
+  drop (e.g. a scene) is handled by Godot as usual.
 - **Has floor** / **Has ceiling** (dock) — remove a sector's floor or ceiling.
 - `J` (or **Join** in the dock) — join the selected sectors into one,
   with the first-selected one's heights and materials. Walls between them

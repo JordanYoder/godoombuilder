@@ -96,6 +96,7 @@ func _run() -> void:
 	_select_similar()
 	_prefabs()
 	_wall_length()
+	_drop_materials()
 	print("RESULT: %s (%d failures)" % ["OK" if fails == 0 else "FAILED", fails])
 	quit(1 if fails else 0)
 
@@ -329,3 +330,44 @@ func _wall_length() -> void:
 	check(near_v((sw.a + sw.b) * 0.5, Vector2(2, 0)) and absf(sw.a.distance_to(sw.b) - 2.0) < 0.001
 		and absf(s.area() - 12.0) < 0.001, "with Center fixed, both ends move in")
 	done(ed)
+
+
+## Materials and textures dropped on a surface in the 3D view.
+func _drop_materials() -> void:
+	var ed := make_editor([rect(0, 0, 4, 4), rect(4, 0, 8, 4), rect(8, 0, 12, 4)])
+	var sectors := ed.map.data.sectors
+	var hit_at := func(si: int, part: int) -> DMMap.Hit:
+		var h := DMMap.Hit.new()
+		h.sector = si
+		h.part = part
+		return h
+	var mat := StandardMaterial3D.new()
+	check(ed.drop_on_surface(ed.map, hit_at.call(1, DMBuilder.Part.CEILING), mat) and sectors[1].ceiling_material == mat
+		and sectors[0].ceiling_material == null and sectors[1].floor_material == null,
+		"a material dropped on a ceiling goes on just that ceiling")
+	check(ed.commits.back() == "Drop Ceiling Material", "it's one undo step")
+	ed.undo()
+	check(ed.map.data.sectors[1].ceiling_material == null, "undo takes it off again")
+	sectors = ed.map.data.sectors
+
+	var img := Image.create(4, 4, false, Image.FORMAT_RGB8)
+	var tex := ImageTexture.create_from_image(img)
+	ed.drop_on_surface(ed.map, hit_at.call(0, DMBuilder.Part.WALL), tex)
+	var made := sectors[0].wall_material as StandardMaterial3D
+	check(made != null and made.albedo_texture == tex and sectors[1].wall_material == null,
+		"a texture dropped on a wall gets a material showing it, on that sector's walls")
+	ed.drop_on_surface(ed.map, hit_at.call(2, DMBuilder.Part.FLOOR), tex)
+	check(sectors[2].floor_material == made, "dropping the same texture again reuses that material")
+
+	ed.tool.selected.assign([0, 1])
+	ed.drop_on_surface(ed.map, hit_at.call(1, DMBuilder.Part.FLOOR), mat)
+	check(sectors[0].floor_material == mat and sectors[1].floor_material == mat and sectors[2].floor_material == made,
+		"dropped on a selected sector, it goes on every selected sector")
+	check(not ed.drop_on_surface(ed.map, hit_at.call(2, DMBuilder.Part.FLOOR), DMMapData.new()) and sectors[2].floor_material == made,
+		"other resources are ignored")
+	check(DMDropTarget.dropped_resource({"type": "resource", "resource": mat}) == mat
+		and DMDropTarget.dropped_resource({"type": "resource", "resource": DMMapData.new()}) == null
+		and DMDropTarget.dropped_resource({"type": "files", "files": PackedStringArray(["res://test/materials/demo_wall.tres"])}) is Material,
+		"drag data: a material or texture is accepted, from the Inspector or as a file")
+	done(ed)
+

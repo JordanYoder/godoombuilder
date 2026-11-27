@@ -57,12 +57,18 @@ static func build(data: DMMapData) -> DMBuildInfo:
 			if s.has_ceiling:
 				info.add_face(ceil_pts, tri, Vector3.DOWN, info.slot_of(s.ceiling_material), si, Part.CEILING, no_edge, ceiling_uv)
 
-	# Walls: every polygon edge, split where it borders other sectors.
+	# Walls: every edge of each sector's outline, split where it borders other
+	# sectors. A sector stored as several pieces uses its real outline (outer
+	# walls and holes), so the seams between its pieces make no walls and
+	# split no walls (its own or its neighbours').
 	var ea := PackedVector2Array()
 	var eb := PackedVector2Array()
 	var es := PackedInt32Array()
 	for si in sectors.size():
-		for poly in sectors[si].polygons:
+		var loops: Array[PackedVector2Array] = sectors[si].polygons
+		if loops.size() > 1:
+			loops = DMMapData.region_loops(loops)
+		for poly in loops:
 			var n := poly.size()
 			for i in n:
 				ea.append(poly[i])
@@ -108,6 +114,7 @@ static func build(data: DMMapData) -> DMBuildInfo:
 			at = maxf(at, sp.y)
 		if length > at + DMGeo.LINE_EPS:
 			pieces.append(Vector3(at, length, -1))
+		pieces = _split_at_settings(pieces, a, b, sectors[es[k]])
 		for pc in pieces:
 			var p0 := a + u * pc.x
 			var p1 := a + u * pc.y
@@ -131,6 +138,35 @@ static func build(data: DMMapData) -> DMBuildInfo:
 			_thick_walls(info, s, si, loop)
 	info.finish()
 	return info
+
+
+## Splits pieces of the edge a -> b where one of this sector's single-wall
+## settings starts or ends, so a setting on part of a wall stays on that part.
+static func _split_at_settings(pieces: Array[Vector3], a: Vector2, b: Vector2, s: DMSector) -> Array[Vector3]:
+	if s.wall_overrides.is_empty():
+		return pieces
+	var length := a.distance_to(b)
+	var u := (b - a) / length
+	var cuts: Array[float] = []
+	for o in s.wall_overrides:
+		for p: Vector2 in DMSector.setting_edge(o):
+			if absf(u.cross(p - a)) > DMGeo.LINE_EPS:
+				continue
+			var t := u.dot(p - a)
+			if t > DMGeo.LINE_EPS and t < length - DMGeo.LINE_EPS:
+				cuts.append(t)
+	if cuts.is_empty():
+		return pieces
+	cuts.sort()
+	var out: Array[Vector3] = []
+	for pc in pieces:
+		var from := pc.x
+		for t in cuts:
+			if t > from + DMGeo.LINE_EPS and t < pc.y - DMGeo.LINE_EPS:
+				out.append(Vector3(from, t, pc.z))
+				from = t
+		out.append(Vector3(from, pc.y, pc.z))
+	return out
 
 
 ## Buckets edges into a uniform grid by their bounding boxes, so finding the

@@ -181,6 +181,74 @@ func set_selected_material(part: int, mat: Material) -> void:
 	_commit("Set Sector Material", before)
 
 
+## Puts a dropped material (or texture) on the surface `hit` of map `m`:
+## that sector's floor, ceiling or walls, or those of every selected sector
+## when it was dropped on one of them. A texture gets a material made for it
+## (shared by every surface it's dropped on in the map). Returns false when
+## `res` isn't a material or texture.
+func drop_on_surface(m: DMMap, hit: DMMap.Hit, res: Resource) -> bool:
+	if m == null or hit == null or res == null:
+		return false
+	if m != map:
+		_focus_map(m)
+	if map != m or hit.sector < 0 or hit.sector >= _sectors().size():
+		return false
+	var mat := material_for(res)
+	if mat == null:
+		return false
+	var targets: Array[int] = []
+	if tool.selected.has(hit.sector):
+		targets.assign(tool.selected)
+	else:
+		targets.append(hit.sector)
+	var before := map.data.duplicate_data()
+	for i in targets:
+		var s := _sectors()[i]
+		match hit.part:
+			DMBuilder.Part.FLOOR:
+				s.floor_material = mat
+			DMBuilder.Part.CEILING:
+				s.ceiling_material = mat
+			_:
+				s.wall_material = mat
+	var what: String = ["Floor", "Ceiling", "Wall"][clampi(hit.part, 0, 2)]
+	_commit("Drop %s Material" % what, before)
+	return true
+
+
+## `res` as a material for a surface: a material as it is; for a texture, the
+## material already made for it in this map, or a new one showing it.
+func material_for(res: Resource) -> Material:
+	if res is Material:
+		return res as Material
+	var tex := res as Texture2D
+	if tex == null:
+		return null
+	if map != null:
+		for s in _sectors():
+			for m: Material in [s.floor_material, s.ceiling_material, s.wall_material]:
+				var made := m as StandardMaterial3D
+				if made != null and made.albedo_texture == tex and made.get_meta(TEXTURE_MATERIAL_META, false):
+					return made
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = tex
+	mat.resource_name = tex.resource_path.get_file().get_basename() if not tex.resource_path.is_empty() else "Texture"
+	mat.set_meta(TEXTURE_MATERIAL_META, true)
+	return mat
+
+
+## Marks materials made for a dropped texture (so they're reused).
+const TEXTURE_MATERIAL_META := &"godoombuilder_texture_material"
+
+
+## Shows which surface a drop would land on (while dragging over a 3D view).
+func show_drop_hint(m: DMMap, hit: DMMap.Hit) -> void:
+	if m != map or m == null:
+		return
+	tool.hover = hit
+	update_overlays()
+
+
 ## Records an edit the tool already applied to map.data (e.g. a drag).
 func commit_snapshot(action: String, before: DMMapData) -> void:
 	_commit(action, before)
@@ -1022,6 +1090,11 @@ func _commit(action: String, before: DMMapData, merge := false) -> void:
 
 
 # --- Hooks (overridden by the plugin, and by tests) ------------------------------
+
+## Starts editing map `m` (the plugin also selects its node).
+func _focus_map(m: DMMap) -> void:
+	set_map(m)
+
 
 ## Adds an applied edit to the undo history: undo restores `before`, redo
 ## `after` (both via DMMapData.copy_from).
