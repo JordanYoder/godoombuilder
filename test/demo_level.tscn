@@ -98,35 +98,9 @@ floor_material = ExtResource("8_nq7xy")
 ceiling_material = ExtResource("4_cyi7p")
 wall_material = ExtResource("6_okmyw")
 
-[sub_resource type="Resource" id="Resource_01e7p"]
-script = ExtResource("3_tjuuh")
-polygons = Array[PackedVector2Array]([PackedVector2Array(8.5, -2.5, 8.5, 0, 5.5, 0, 5.5, -2.5)])
-ceiling_height = 3.0
-has_ceiling = false
-wall_thickness = 1.0
-outer_corners = {
-Vector2i(55000, -25000): Vector2(0, -1.5),
-Vector2i(85000, -25000): Vector2(0, -1.5)
-}
-wall_overrides = Array[Dictionary]([{
-"a": Vector2(5.5, -1.5),
-"b": Vector2(8.5, -1.5),
-"hidden": true,
-"top": 0.5
-}, {
-"a": Vector2(5.5, -2.5),
-"b": Vector2(8.5, -2.5),
-"thickness": 0.25,
-"top": 1.0
-}, {
-"a": Vector2(5.5, 0),
-"b": Vector2(5.5, -2.5),
-"thickness": 1.0
-}])
-
 [sub_resource type="Resource" id="Resource_bs2jk"]
 script = ExtResource("2_1rdli")
-sectors = Array[ExtResource("3_tjuuh")]([SubResource("Resource_1rdli"), SubResource("Resource_tjuuh"), SubResource("Resource_cyi7p"), SubResource("Resource_pugwu"), SubResource("Resource_okmyw"), SubResource("Resource_odf88"), SubResource("Resource_nq7xy"), SubResource("Resource_al0uj"), SubResource("Resource_gx0wo"), SubResource("Resource_01e7p")])
+sectors = Array[ExtResource("3_tjuuh")]([SubResource("Resource_1rdli"), SubResource("Resource_tjuuh"), SubResource("Resource_cyi7p"), SubResource("Resource_pugwu"), SubResource("Resource_okmyw"), SubResource("Resource_odf88"), SubResource("Resource_nq7xy"), SubResource("Resource_al0uj"), SubResource("Resource_gx0wo")])
 
 [sub_resource type="Resource" id="Resource_bu8gv"]
 script = ExtResource("2_1rdli")
